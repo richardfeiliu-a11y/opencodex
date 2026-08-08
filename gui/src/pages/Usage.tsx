@@ -517,7 +517,7 @@ function UsageModelsTable({
               <td className="muted">{formatProviderDisplayName(model.provider, t)}</td>
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
-              <td><CompactNumber value={model.totalTokens} locale={locale} className="num mono" /></td>
+              <td className="num"><CompactNumber value={model.totalTokens} locale={locale} className="mono" /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -577,7 +577,7 @@ function UsageProvidersTable({
               <td className="mono">{formatProviderDisplayName(provider.provider, t)}</td>
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
-              <td><CompactNumber value={provider.totalTokens} locale={locale} className="num mono" /></td>
+              <td className="num"><CompactNumber value={provider.totalTokens} locale={locale} className="mono" /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
