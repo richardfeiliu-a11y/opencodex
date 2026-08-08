@@ -318,8 +318,9 @@ describe("formatRequestCount", () => {
   test("en: 999,999 -> 999.99k (not 1000k)", () => {
     expect(formatRequestCount(999999, "en")).toBe("999.99k");
   });
-  test("de: 12,340 -> 12,34 Tsd. (German branch preserved)", () => {
-    expect(formatRequestCount(12340, "de")).toBe("12,34 Tsd.");
+  test("de: 12,340 -> 12,3 Tsd. (German branch preserved as-is, 1 decimal)", () => {
+    // §12.2 德语分支保留原样:Tsd./Mio. 档维持 toFixed(1),不升级到 2 位。
+    expect(formatRequestCount(12340, "de")).toBe("12,3 Tsd.");
   });
 });
 ```
