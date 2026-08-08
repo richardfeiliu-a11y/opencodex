@@ -48,68 +48,71 @@
 
 - [ ] **Step 1: 写失败测试(usage-summary.test.ts)**
 
-在 `tests/usage-summary.test.ts` 末尾新增:
+在 `tests/usage-summary.test.ts` 末尾新增。**复用既有 `entry()` 工厂**(默认 `usageStatus: "unreported"`,可通过 override 传 usageStatus/usage/totalTokens),不新建 `base()`:
 
 ```ts
 describe("summarizeUsage filters", () => {
-  const base = (over: Partial<import("../src/usage/log").PersistedUsageEntry>) => ({
-    requestId: `req-${Math.random().toString(36).slice(2)}`,
-    timestamp: 1_800_000_000_000,
-    provider: "openai",
-    model: "gpt-5.5",
-    status: 200,
-    durationMs: 10,
-    usageStatus: "reported" as const,
-    usage: { inputTokens: 10, outputTokens: 5 },
-    totalTokens: 15,
-    ...over,
-  });
+  const F = 1_800_000_000_000;
   const entries = [
-    base({ requestId: "a", provider: "openai", model: "gpt-5.5", status: 200, timestamp: 1_800_000_000_000 }),
-    base({ requestId: "b", provider: "anthropic", model: "claude-x", status: 200, timestamp: 1_800_000_000_000 }),
-    base({ requestId: "c", provider: "openai", model: "gpt-5.5", status: 503, timestamp: 1_800_000_000_000 }),
-    base({ requestId: "d", provider: "openai", model: "gpt-4.5", status: 200, timestamp: 1_800_000_000_000 - 86_400_000 }),
+    entry({ ts: F, requestId: "a", provider: "openai", model: "gpt-5.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F, requestId: "b", provider: "anthropic", model: "claude-x", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F, requestId: "c", provider: "openai", model: "gpt-5.5", status: 503, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F - 86_400_000, requestId: "d", provider: "openai", model: "gpt-4.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F - 2 * 86_400_000, requestId: "e", provider: "openai", model: "gpt-5.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
   ];
 
   test("filters by provider (top-level exact match)", () => {
-    const s = summarizeUsage(entries, "all", 1_800_000_000_000, "all", { provider: "openai" });
-    expect(s.summary.requests).toBe(3); // a, c, d
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "openai" });
+    expect(s.summary.requests).toBe(4); // a, c, d, e
     expect(s.filters?.provider).toBe("openai");
   });
 
   test("filters by model (top-level exact match)", () => {
-    const s = summarizeUsage(entries, "all", 1_800_000_000_000, "all", { model: "gpt-5.5" });
-    expect(s.summary.requests).toBe(2); // a, c
+    const s = summarizeUsage(entries, "all", F, "all", { model: "gpt-5.5" });
+    expect(s.summary.requests).toBe(3); // a, c, e
   });
 
   test("filters by status", () => {
-    const s = summarizeUsage(entries, "all", 1_800_000_000_000, "all", { status: 503 });
+    const s = summarizeUsage(entries, "all", F, "all", { status: 503 });
     expect(s.summary.requests).toBe(1); // c
   });
 
   test("filters by from/to timestamp", () => {
-    const s = summarizeUsage(entries, "all", 1_800_000_000_000, "all",
-      { from: 1_800_000_000_000 - 1, to: 1_800_000_000_000 });
-    expect(s.summary.requests).toBe(3); // a, b, c (d older than from)
+    const s = summarizeUsage(entries, "all", F, "all", { from: F - 1, to: F });
+    expect(s.summary.requests).toBe(3); // a, b, c (d, e older than from)
   });
 
   test("combines filters", () => {
-    const s = summarizeUsage(entries, "all", 1_800_000_000_000, "all",
-      { provider: "openai", model: "gpt-5.5", status: 200 });
-    expect(s.summary.requests).toBe(1); // a
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "openai", model: "gpt-5.5", status: 200 });
+    expect(s.summary.requests).toBe(2); // a, e
   });
 
   test("empty result when no match", () => {
-    const s = summarizeUsage(entries, "all", 1_800_000_000_000, "all", { provider: "nobody" });
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "nobody" });
     expect(s.summary.requests).toBe(0);
     expect(s.summary.totalTokens).toBe(0);
   });
 
   test("no filters behaves exactly as before", () => {
-    const withFilters = summarizeUsage(entries, "all", 1_800_000_000_000, "all", undefined);
-    const without = summarizeUsage(entries, "all", 1_800_000_000_000, "all");
+    const withFilters = summarizeUsage(entries, "all", F, "all", undefined);
+    const without = summarizeUsage(entries, "all", F, "all");
     expect(withFilters.summary.requests).toBe(without.summary.requests);
     expect(withFilters.summary.totalTokens).toBe(without.summary.totalTokens);
+  });
+
+  // P1 修订:from/to 与 range 的交互 —— 传了 from/to 时忽略 range 的 since 裁剪
+  test("range=7d with from/to uses from/to, not the 7d window", () => {
+    // e 在 7d 窗口外(2 天前?不,7d 窗口=now-7d,e=now-2d 在窗口内)
+    // 改用显式 from/to 收窄:from=F-1 排除 d 和 e
+    const s = summarizeUsage(entries, "7d", F, "all", { from: F - 1, to: F });
+    expect(s.summary.requests).toBe(3); // a, b, c —— 与 range=all 的 from/to 结果一致
+  });
+
+  test("range=7d with from/to wider than window keeps from/to (not double-clipped)", () => {
+    // from 在 7d 窗口之前(如 F-10d):若叠加 since 裁剪,e(2d 前)会被 since 排除
+    // 若忽略 since,只有 from 生效
+    const s = summarizeUsage(entries, "7d", F, "all", { from: F - 10 * 86_400_000 });
+    expect(s.summary.requests).toBe(5); // a-e 全在 from 之后
   });
 });
 ```
@@ -145,7 +148,7 @@ export interface UsageSummaryFilters {
   filters?: UsageSummaryFilters;
 ```
 
-修改 `summarizeUsage` 签名与过滤链:
+修改 `summarizeUsage` 签名与过滤链。**P1 修订:range 的 since 与 from/to 的交互策略**——当 `filters` 含 `from` 或 `to` 时,忽略 range 的 since 裁剪(只由 from/to 决定时间下界/上界);否则沿用 range 窗口:
 
 ```ts
 export function summarizeUsage(
@@ -155,7 +158,10 @@ export function summarizeUsage(
   surface: UsageSurface = "all",
   filters?: UsageSummaryFilters,
 ): UsageSummary {
-  const { since } = rangeWindow(range, now);
+  // P1 修订:from/to 优先于 range 窗口。传了 from/to 时,since 不再参与裁剪,
+  // 避免与 request-history(无 range,只认 from/to)产生双重裁剪导致计数不一致。
+  const hasExplicitTime = filters?.from !== undefined || filters?.to !== undefined;
+  const { since } = hasExplicitTime ? { since: null } : rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
@@ -215,7 +221,12 @@ git commit -m "feat(usage): add provider/model/status/from/to filters to summari
 
 - [ ] **Step 1: 写失败测试(api-usage.test.ts)**
 
-在 `tests/api-usage.test.ts` 的 `describe("GET /api/usage", ...)` 块内追加(注意复用既有 `writeFixture`):
+在 `tests/api-usage.test.ts` 的 `describe("GET /api/usage", ...)` 块内追加。**P2 修订:先扩展 `writeFixture`,把 `ocx-missing` 的 status 改为 503**(原为 200),使一致性测试能落在非空集上。注意:这会让 provider=anthropic 的记录 status=503 而非 200,需同步校对缓存隔离断言的预期值:
+
+```ts
+// writeFixture 中第三条(ocx-missing)改为:
+//   provider: "anthropic", model: "claude-x", surface: "claude", status: 503, usageStatus: "unreported"
+```
 
 ```ts
 test("accepts provider/model/status/from/to filters", async () => {
@@ -249,11 +260,11 @@ test("cache key isolates different filters", async () => {
   const b = await (await fetch("/api/usage?range=all&provider=anthropic")).json();
   // 若缓存 key 未隔离,第二次请求会错误复用第一次结果
   expect(a.summary.requests).toBe(2); // openai: ocx-old, ocx-recent
-  expect(b.summary.requests).toBe(1); // anthropic: ocx-missing
+  expect(b.summary.requests).toBe(1); // anthropic: ocx-missing(status 改 503 后仍 1 条)
 });
 ```
 
-> 注:`writeFixture` 的 now 参数在既有测试中通过 `writeFixture(Date.now())` 调用;`ocx-old` timestamp 为 `now - 10d`,`ocx-recent`/`ocx-missing` 为 `now - 1d`。provider=openai 共 2 条(ocx-old, ocx-recent),provider=anthropic 共 1 条(ocx-missing)。
+> 注:`writeFixture` 的 now 参数在既有测试中通过 `writeFixture(Date.now())` 调用;`ocx-old` timestamp 为 `now - 10d`,`ocx-recent`/`ocx-missing` 为 `now - 1d`。provider=openai 共 2 条(ocx-old, ocx-recent),provider=anthropic 共 1 条(ocx-missing,status=503)。
 
 - [ ] **Step 2: 运行确认失败**
 
@@ -326,6 +337,8 @@ import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type Us
 
 > 注:`jsonResponse` 与 `req`/`config` 均已在此函数作用域可用(第 187-188 行上下文已使用)。
 
+**P2 修订 — `usageSummaryExpiresAt` 说明**:该函数(约第 201 行调用)接收 `(entries, range, surface, now)`,按 range+surface 计算缓存到期时间,内部用 `usageEntryMatchesSurface` 遍历全集,**不带 filters**。本 PR **暂不修改它**:过滤后缓存条目的过期时间沿用全集语义,只会导致"过期偏宽松、偶尔重算",不影响正确性。这是已知可接受偏差,记录在此避免实现者困惑;若将来收紧过期逻辑,需把 filters 纳入该函数。
+
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
@@ -380,6 +393,7 @@ describe("filter consistency across /api/usage and /api/request-history", () => 
   test("same status filter yields same request count on both endpoints", async () => {
     const now = Date.now();
     writeFixture(now);
+    // P2 修订:fixture 的 ocx-missing 已改 status=503,此断言落在非空集上
     const usageRes = await fetch("/api/usage?range=all&status=503");
     const usageBody = await usageRes.json();
     let total = 0;
@@ -390,7 +404,29 @@ describe("filter consistency across /api/usage and /api/request-history", () => 
       total += rh.entries.length;
       cursor = rh.nextCursor;
     } while (cursor);
-    expect(usageBody.summary.requests).toBe(total);
+    expect(usageBody.summary.requests).toBe(1); // ocx-missing
+    expect(total).toBe(1);
+  });
+
+  // P1 修订:range 与 from/to 组合 —— 锁定"from/to 优先,不双重裁剪"策略
+  test("range=7d plus from/to stays consistent across both endpoints", async () => {
+    const now = Date.now();
+    writeFixture(now);
+    const from = now - 2 * 86_400_000; // 覆盖 ocx-recent(1d 前)与 ocx-missing(1d 前),排除 ocx-old(10d 前)
+    const usageRes = await fetch(`/api/usage?range=7d&from=${from}`);
+    const usageBody = await usageRes.json();
+    let total = 0;
+    let cursor: string | undefined;
+    do {
+      const url = `/api/request-history?from=${from}&limit=100` + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+      const rh = await (await fetch(url)).json();
+      total += rh.entries.length;
+      cursor = rh.nextCursor;
+    } while (cursor);
+    // 若 range 的 since 与 from 双重裁剪,/api/usage 会额外排除窗口外记录,
+    // 与 request-history(只认 from)不一致——此断言锁定两者一致。
+    expect(usageBody.summary.requests).toBe(2); // ocx-recent + ocx-missing
+    expect(total).toBe(2);
   });
 });
 ```
@@ -475,3 +511,12 @@ Expected: 工作区干净,3 个提交(过滤类型/路由+缓存/一致性测试
 - **占位符扫描**:无 TBD/TODO;每个 Step 含具体代码与命令。
 - **类型一致性**:`UsageSummaryFilters` 在 Task 1 定义、Task 2 消费;`summarizeUsage` 签名 Task 1 产出、Task 2 调用——一致。
 - **范围**:本 PR 不含 requestedModel 过滤、不含小时聚合、不含 GUI 改动(均明确 deferred)。
+
+## 审查修订记录(2026-08-08,计划级审查后)
+
+| # | 严重度 | 发现 | 修订 |
+|---|---|---|---|
+| 1 | P1 | range 的 since 与 from/to 双重裁剪,破坏跨端点一致性(request-history 无 range,只认 from/to) | Task 1 实现改为"from/to 优先,忽略 range since";Task 3 新增 `range=7d&from=...` 一致性测试锁定该策略 |
+| 2 | P2 | Task 3 的 status=503 是空集断言(原 fixture 全 200),验证价值为零 | `writeFixture` 的 ocx-missing 改为 status=503;断言改为非空集(期望 1);缓存隔离测试预期同步校对 |
+| 3 | P2 | 计划未提 `usageSummaryExpiresAt` 在过滤下的行为 | Task 2 增加说明:暂不改,过期沿用全集语义,标注为已知可接受偏差 |
+| 4 | P3 | Task 1 新建 base() 与既有 entry() 工厂重复且默认值不一致 | 删除 base(),复用既有 entry()(默认 unreported,override 传 reported/usage) |
