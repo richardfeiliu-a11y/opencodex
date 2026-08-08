@@ -755,23 +755,20 @@ describe("summarizeUsage filters", () => {
     expect(withFilters.summary.totalTokens).toBe(without.summary.totalTokens);
   });
 
-  // P1 修订:from/to 与 range 的交互 —— 传了 from/to 时忽略 range 的 since 裁剪
+  // from/to 与 range 的交互:显式 from/to 优先,忽略 range 窗口的 since 裁剪
   test("range=7d with from/to uses from/to, not the 7d window", () => {
-    // e 在 7d 窗口外(2 天前?不,7d 窗口=now-7d,e=now-2d 在窗口内)
-    // 改用显式 from/to 收窄:from=F-1 排除 d 和 e
+    // 显式 from/to 收窄到 [F-1, F],排除 d、e
     const s = summarizeUsage(entries, "7d", F, "all", { from: F - 1, to: F });
     expect(s.summary.requests).toBe(3); // a, b, c —— 与 range=all 的 from/to 结果一致
   });
 
   test("range=7d with from/to wider than window keeps from/to (not double-clipped)", () => {
-    // from 在 7d 窗口之前(如 F-10d):若叠加 since 裁剪,e(2d 前)会被 since 排除
-    // 若忽略 since,只有 from 生效
+    // from 早于 7d 窗口起点:若不忽略 since,e 会被窗口裁剪排除;忽略后只有 from 生效
     const s = summarizeUsage(entries, "7d", F, "all", { from: F - 10 * 86_400_000 });
     expect(s.summary.requests).toBe(5); // a-e 全在 from 之后
   });
 
-  // 回归:P1 修订前 filters 检查位于 surface 分支之后,surface ≠ "all" 时被提前
-  // return 跳过,provider 等过滤被静默忽略。现在 filters 必须在任何 surface 下生效。
+  // 回归保护:filters 检查必须在 surface 分支之前,任何 surface 值下过滤都生效
   test("surface=codex still applies provider filter", () => {
     const surfEntries = [
       entry({ ts: F, requestId: "codex-openai", provider: "openai", surface: undefined, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),

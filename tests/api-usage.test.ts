@@ -344,7 +344,7 @@ describe("filter consistency across /api/usage and /api/request-history", () => 
     writeFixture(now);
     const server = startServer(0);
     try {
-      // P2 修订:fixture 的 ocx-missing 已改 status=503,此断言落在非空集上
+      // fixture 的 ocx-missing 为 status=503,此断言落在非空集上
       const usageRes = await fetch(new URL("/api/usage?range=all&status=503", server.url));
       const usageBody = await usageRes.json();
       let total = 0;
@@ -362,7 +362,7 @@ describe("filter consistency across /api/usage and /api/request-history", () => 
     }
   });
 
-  // P1 修订:range 与 from/to 组合 —— 锁定"from/to 优先,不双重裁剪"策略
+  // range 与 from/to 组合:锁定"from/to 优先,不双重裁剪"策略
   test("range=7d plus from/to stays consistent across both endpoints", async () => {
     const now = Date.now();
     writeFixture(now);
