@@ -56,6 +56,9 @@ describe("formatTokens", () => {
   test("zh: 1,234,567 -> 123.45万 (truncated, not rounded)", () => {
     expect(formatTokens(1234567, "zh")).toBe("123.45万");
   });
+  test("ko: 1,234,567 -> 123.45만 (myriad scale, truncated)", () => {
+    expect(formatTokens(1234567, "ko")).toBe("123.45만");
+  });
   // 千分位精确值
   test("exact: 1,234,567 -> 1,234,567", () => {
     expect(formatTokensExact(1234567)).toBe("1,234,567");

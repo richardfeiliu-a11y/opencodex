@@ -73,7 +73,7 @@ describe("formatTokens", () => {
   test("en: 99,999,999 -> 99.99M (not rounded to 100M)", () => {
     expect(formatTokens(99999999, "en")).toBe("99.99M");
   });
-  test("en: 999,999,999 -> 999.99M (not rounded to 1B)", () => {
+  test("en: 999,999,999 -> 999.99M (in M tier, not rounded to 1000M)", () => {
     expect(formatTokens(999999999, "en")).toBe("999.99M");
   });
   test("en: 1,000,000 -> 1M", () => {

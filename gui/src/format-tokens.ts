@@ -44,6 +44,9 @@ export function formatTokens(n: number, locale: string): string {
 }
 
 /** Exact integer with thousands separators, for tooltips/aria-labels. */
+/** Cached en-US integer formatter — exact values appear in every CompactNumber tooltip. */
+const exactNumberFormatter = new Intl.NumberFormat("en-US");
+
 export function formatTokensExact(n: number): string {
-  return new Intl.NumberFormat("en-US").format(n);
+  return exactNumberFormatter.format(n);
 }
