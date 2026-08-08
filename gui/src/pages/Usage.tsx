@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
+import { CompactNumber } from "../components/CompactNumber";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
@@ -281,13 +282,13 @@ function UsageSummaryCards({
     <div className="usage-cards usage-cards-3x2" role="group" aria-label={t("usage.title")}>
       <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{summary.requests}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
-      <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(summary.totalTokens, locale)}</div></div>
+      <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><CompactNumber value={summary.totalTokens} locale={locale} className="stat-value" /></div>
       <div className="stat" title={t("usage.card.cachedTokensHint")}>
         <div className="muted">{t("usage.card.cachedTokens")}</div>
-        <div className="stat-value">{formatTokens(summary.cacheReadInputTokens ?? summary.cachedInputTokens, locale)}</div>
+        <CompactNumber value={summary.cacheReadInputTokens ?? summary.cachedInputTokens} locale={locale} className="stat-value" />
         {(summary.cacheCreationInputTokens ?? 0) > 0 && (
           <div className="muted text-caption">
-            {t("usage.card.cacheWriteTokens")}: {formatTokens(summary.cacheCreationInputTokens ?? 0, locale)}
+            {t("usage.card.cacheWriteTokens")}: <CompactNumber value={summary.cacheCreationInputTokens ?? 0} locale={locale} />
           </div>
         )}
       </div>
@@ -352,12 +353,12 @@ function WeekDayBars({ weekBars, locale, t }: { weekBars: UsageDay[]; locale: Lo
                   <div key={`${model.provider}/${model.model}`} className="daybar-tip-row">
                     <span className="daybar-tip-swatch" style={{ background: modelColor(model.model, model.provider) }} />
                     <span className="daybar-tip-name">{modelLabel(model.model)}</span>
-                    <span className="daybar-tip-val">{formatTokens(model.totalTokens, locale)}</span>
+                    <CompactNumber value={model.totalTokens} locale={locale} className="daybar-tip-val" />
                   </div>
                 ))}
               </div>
             )}
-            <span className="daybar-count">{formatTokens(day.totalTokens, locale)}</span>
+            <CompactNumber value={day.totalTokens} locale={locale} className="daybar-count" />
             <span className="daybar-label muted">{label}</span>
           </div>
         );
@@ -516,7 +517,7 @@ function UsageModelsTable({
               <td className="muted">{formatProviderDisplayName(model.provider, t)}</td>
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
-              <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+              <td><CompactNumber value={model.totalTokens} locale={locale} className="num mono" /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -576,7 +577,7 @@ function UsageProvidersTable({
               <td className="mono">{formatProviderDisplayName(provider.provider, t)}</td>
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
-              <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
+              <td><CompactNumber value={provider.totalTokens} locale={locale} className="num mono" /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
