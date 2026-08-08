@@ -571,18 +571,19 @@ export function summarizeUsage(
   const { since } = hasExplicitTime ? { since: null } : rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
+    // 可选过滤条件(顶层精确匹配,与 indexer 一致)必须在 surface 分支之前:
+    // surface 分支会直接 return,放后面会导致 surface ≠ "all" 时过滤被静默忽略。
+    if (filters?.provider !== undefined && entry.provider !== filters.provider) return false;
+    if (filters?.model !== undefined && entry.model !== filters.model) return false;
+    if (filters?.status !== undefined && entry.status !== filters.status) return false;
+    if (filters?.from !== undefined && entry.timestamp < filters.from) return false;
+    if (filters?.to !== undefined && entry.timestamp > filters.to) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
     // Codex = the historical unlabelled bucket. Before the grok tag existed every
     // non-Claude turn landed here, and `surface !== "claude"` also swallowed
     // claude-desktop — disjoint predicates fix both.
     if (surface === "codex") return entry.surface === undefined;
-    // 新增:可选过滤条件(顶层精确匹配,与 indexer 一致)
-    if (filters?.provider !== undefined && entry.provider !== filters.provider) return false;
-    if (filters?.model !== undefined && entry.model !== filters.model) return false;
-    if (filters?.status !== undefined && entry.status !== filters.status) return false;
-    if (filters?.from !== undefined && entry.timestamp < filters.from) return false;
-    if (filters?.to !== undefined && entry.timestamp > filters.to) return false;
     return true;
   });
   const totals = blankTotals();

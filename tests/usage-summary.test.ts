@@ -769,4 +769,20 @@ describe("summarizeUsage filters", () => {
     const s = summarizeUsage(entries, "7d", F, "all", { from: F - 10 * 86_400_000 });
     expect(s.summary.requests).toBe(5); // a-e 全在 from 之后
   });
+
+  // 回归:P1 修订前 filters 检查位于 surface 分支之后,surface ≠ "all" 时被提前
+  // return 跳过,provider 等过滤被静默忽略。现在 filters 必须在任何 surface 下生效。
+  test("surface=codex still applies provider filter", () => {
+    const surfEntries = [
+      entry({ ts: F, requestId: "codex-openai", provider: "openai", surface: undefined, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+      entry({ ts: F, requestId: "codex-anthropic", provider: "anthropic", surface: undefined, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+      entry({ ts: F, requestId: "claude-openai", provider: "openai", surface: "claude", usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    ];
+    const s = summarizeUsage(surfEntries, "all", F, "codex", { provider: "openai" });
+    // 只保留 surface 未定义(surface=codex 桶)且 provider=openai 的那条:
+    // claude 那条被 surface 排除,anthropic 那条被 provider 排除。
+    expect(s.summary.requests).toBe(1);
+    expect(s.summary.totalTokens).toBe(15);
+    expect(s.providers.map(p => p.provider)).toEqual(["openai"]);
+  });
 });
