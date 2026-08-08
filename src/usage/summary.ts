@@ -7,6 +7,15 @@ import { estimateComboCost, estimateRequestCost, serviceTierContext } from "./co
 export type UsageRange = "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude" | "grok";
 
+/** 可选过滤条件,语义与 request-history indexer 一致:顶层精确匹配,不含 attempts。 */
+export interface UsageSummaryFilters {
+  provider?: string;
+  model?: string;
+  status?: number;
+  from?: number;
+  to?: number;
+}
+
 export interface UsageSummaryTotals {
   requests: number;
   attemptCount: number;
@@ -84,6 +93,8 @@ export interface UsageSummary {
   surface: UsageSurface;
   since: number | null;
   generatedAt: number;
+  /** 回显本次请求使用的过滤条件;无过滤时为 undefined。 */
+  filters?: UsageSummaryFilters;
   summary: UsageSummaryTotals;
   days: UsageDay[];
   models: UsageModel[];
@@ -552,8 +563,12 @@ export function summarizeUsage(
   range: UsageRange,
   now: number,
   surface: UsageSurface = "all",
+  filters?: UsageSummaryFilters,
 ): UsageSummary {
-  const { since } = rangeWindow(range, now);
+  // P1 修订:from/to 优先于 range 窗口。传了 from/to 时,since 不再参与裁剪,
+  // 避免与 request-history(无 range,只认 from/to)产生双重裁剪导致计数不一致。
+  const hasExplicitTime = filters?.from !== undefined || filters?.to !== undefined;
+  const { since } = hasExplicitTime ? { since: null } : rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
@@ -562,6 +577,12 @@ export function summarizeUsage(
     // non-Claude turn landed here, and `surface !== "claude"` also swallowed
     // claude-desktop — disjoint predicates fix both.
     if (surface === "codex") return entry.surface === undefined;
+    // 新增:可选过滤条件(顶层精确匹配,与 indexer 一致)
+    if (filters?.provider !== undefined && entry.provider !== filters.provider) return false;
+    if (filters?.model !== undefined && entry.model !== filters.model) return false;
+    if (filters?.status !== undefined && entry.status !== filters.status) return false;
+    if (filters?.from !== undefined && entry.timestamp < filters.from) return false;
+    if (filters?.to !== undefined && entry.timestamp > filters.to) return false;
     return true;
   });
   const totals = blankTotals();
@@ -577,6 +598,7 @@ export function summarizeUsage(
     surface,
     since,
     generatedAt: now,
+    ...(filters ? { filters } : {}),
     summary: totals,
     days: buildDayGrid(range, since, now, filteredEntries),
     models: buildModels(filteredEntries, totals.totalTokens),

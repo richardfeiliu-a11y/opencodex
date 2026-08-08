@@ -705,3 +705,68 @@ describe("summarizeUsage", () => {
   });
 
 });
+
+describe("summarizeUsage filters", () => {
+  const F = 1_800_000_000_000;
+  const entries = [
+    entry({ ts: F, requestId: "a", provider: "openai", model: "gpt-5.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F, requestId: "b", provider: "anthropic", model: "claude-x", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F, requestId: "c", provider: "openai", model: "gpt-5.5", status: 503, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F - 86_400_000, requestId: "d", provider: "openai", model: "gpt-4.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F - 2 * 86_400_000, requestId: "e", provider: "openai", model: "gpt-5.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+  ];
+
+  test("filters by provider (top-level exact match)", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "openai" });
+    expect(s.summary.requests).toBe(4); // a, c, d, e
+    expect(s.filters?.provider).toBe("openai");
+  });
+
+  test("filters by model (top-level exact match)", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { model: "gpt-5.5" });
+    expect(s.summary.requests).toBe(3); // a, c, e
+  });
+
+  test("filters by status", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { status: 503 });
+    expect(s.summary.requests).toBe(1); // c
+  });
+
+  test("filters by from/to timestamp", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { from: F - 1, to: F });
+    expect(s.summary.requests).toBe(3); // a, b, c (d, e older than from)
+  });
+
+  test("combines filters", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "openai", model: "gpt-5.5", status: 200 });
+    expect(s.summary.requests).toBe(2); // a, e
+  });
+
+  test("empty result when no match", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "nobody" });
+    expect(s.summary.requests).toBe(0);
+    expect(s.summary.totalTokens).toBe(0);
+  });
+
+  test("no filters behaves exactly as before", () => {
+    const withFilters = summarizeUsage(entries, "all", F, "all", undefined);
+    const without = summarizeUsage(entries, "all", F, "all");
+    expect(withFilters.summary.requests).toBe(without.summary.requests);
+    expect(withFilters.summary.totalTokens).toBe(without.summary.totalTokens);
+  });
+
+  // P1 修订:from/to 与 range 的交互 —— 传了 from/to 时忽略 range 的 since 裁剪
+  test("range=7d with from/to uses from/to, not the 7d window", () => {
+    // e 在 7d 窗口外(2 天前?不,7d 窗口=now-7d,e=now-2d 在窗口内)
+    // 改用显式 from/to 收窄:from=F-1 排除 d 和 e
+    const s = summarizeUsage(entries, "7d", F, "all", { from: F - 1, to: F });
+    expect(s.summary.requests).toBe(3); // a, b, c —— 与 range=all 的 from/to 结果一致
+  });
+
+  test("range=7d with from/to wider than window keeps from/to (not double-clipped)", () => {
+    // from 在 7d 窗口之前(如 F-10d):若叠加 since 裁剪,e(2d 前)会被 since 排除
+    // 若忽略 since,只有 from 生效
+    const s = summarizeUsage(entries, "7d", F, "all", { from: F - 10 * 86_400_000 });
+    expect(s.summary.requests).toBe(5); // a-e 全在 from 之后
+  });
+});
