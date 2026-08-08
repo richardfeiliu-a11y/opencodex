@@ -58,8 +58,10 @@ describe("formatTokens", () => {
   test("en: below 10k stays as-is", () => {
     expect(formatTokens(999, "en")).toBe("999");
   });
-  test("en: 1,000 -> 1K (integer, no decimals)", () => {
-    expect(formatTokens(1000, "en")).toBe("1K");
+  test("en: 1,000 -> 1000 (below 10k threshold, shown as-is)", () => {
+    // §12.3 保持 formatTokens 的 1e4 阈值:1,000 未达 10K,原样显示。
+    // (报告 §12.1 表格的 "1K" 基于 br() 的 1e3 阈值;真实主格式化器 formatTokens 是 1e4 阈值。)
+    expect(formatTokens(1000, "en")).toBe("1000");
   });
   test("en: 12,340 -> 12.34K (2 decimals)", () => {
     expect(formatTokens(12340, "en")).toBe("12.34K");
@@ -67,20 +69,21 @@ describe("formatTokens", () => {
   test("en: 999,999 -> 999.99K (not rounded to 1M)", () => {
     expect(formatTokens(999999, "en")).toBe("999.99K");
   });
+  // 跨档边界(审查 P1):四舍五入会让 999.999 进位到 1000,必须截断
+  test("en: 99,999,999 -> 99.99M (not rounded to 100M)", () => {
+    expect(formatTokens(99999999, "en")).toBe("99.99M");
+  });
+  test("en: 999,999,999 -> 999.99M (not rounded to 1B)", () => {
+    expect(formatTokens(999999999, "en")).toBe("999.99M");
+  });
   test("en: 1,000,000 -> 1M", () => {
     expect(formatTokens(1000000, "en")).toBe("1M");
-  });
-  test("en: 99,999,999 -> 99.99M", () => {
-    expect(formatTokens(99999999, "en")).toBe("99.99M");
   });
   test("en: 100,000,000 -> 100M (integer)", () => {
     expect(formatTokens(100000000, "en")).toBe("100M");
   });
   test("en: 128,394,822 -> 128.39M", () => {
     expect(formatTokens(128394822, "en")).toBe("128.39M");
-  });
-  test("en: 999,999,999 -> 999.99M (not 1B)", () => {
-    expect(formatTokens(999999999, "en")).toBe("999.99M");
   });
   test("en: 1,000,000,000 -> 1B", () => {
     expect(formatTokens(1000000000, "en")).toBe("1B");
@@ -96,8 +99,8 @@ describe("formatTokens", () => {
   test("zh: 12,340 -> 1.23万 (myriad scale preserved)", () => {
     expect(formatTokens(12340, "zh")).toBe("1.23万");
   });
-  test("zh: 1,234,567 -> 123.46万", () => {
-    expect(formatTokens(1234567, "zh")).toBe("123.46万");
+  test("zh: 1,234,567 -> 123.45万 (truncated, not rounded)", () => {
+    expect(formatTokens(1234567, "zh")).toBe("123.45万");
   });
   // 千分位精确值
   test("exact: 1,234,567 -> 1,234,567", () => {
@@ -127,12 +130,15 @@ function trimTrailingZeros(s: string): string {
   return s.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
 }
 
-/** §12.1: max 2 decimals, trailing zeros trimmed, integer values show 0 decimals. */
+/** §12.1: max 2 decimals, trailing zeros trimmed, integer values show 0 decimals.
+ *  MUST floor-truncate to 2 decimals (not round): rounding makes 999.999 -> 1000,
+ *  crossing into the next suffix tier (999,999 would show "1000K" instead of "999.99K"). */
 function compactWithPrecision(value: number, divisor: number, suffix: string): string {
   const scaled = value / divisor;
-  // If scaled is an integer (within float tolerance), show no decimals.
-  if (Number.isInteger(scaled)) return `${scaled}${suffix}`;
-  const fixed = scaled.toFixed(2);
+  // 截断到 2 位小数(不四舍五入),避免跨档进位。
+  const truncated = Math.floor(scaled * 100) / 100;
+  if (Number.isInteger(truncated)) return `${truncated}${suffix}`;
+  const fixed = truncated.toFixed(2);
   return `${trimTrailingZeros(fixed)}${suffix}`;
 }
 
@@ -159,7 +165,7 @@ export function formatTokensExact(n: number): string {
 }
 ```
 
-> 说明:`compactWithPrecision` 用 `Number.isInteger(scaled)` 判定整数(避免 `128.4M` 这类 1 位小数来自 `toFixed(1)` 的历史行为);`toFixed(2)` 保证最多 2 位,`trimTrailingZeros` 去尾零。CJK 分支复用同一逻辑(1e4 万 刻度下 12,340→1.23万)。原 `trim()` 函数被 `trimTrailingZeros` 取代(语义相同,改名以明确定位)。
+> 说明:`compactWithPrecision` 用 `Math.floor(scaled * 100) / 100` **截断**到 2 位(不是四舍五入)——四舍五入会让 999,999/1000=999.999 进位成 1000K,跨档破坏 §12.1 规范(审查 P1 确认的真 bug,修复前实测 `999999→1000K`、`99999999→100M`、`999999999→1B`,修复后分别为 `999.99K`/`99.99M`/`999.99M`)。`Number.isInteger(truncated)` 判定整数显示 0 位。CJK 分支复用同一逻辑(1e4 万 刻度下 12,340→1.23万)。原 `trim()` 函数被 `trimTrailingZeros` 取代。
 
 - [ ] **Step 4: 运行确认通过**
 
@@ -308,6 +314,10 @@ describe("formatRequestCount", () => {
   test("en: 128,394,822 -> 128.39M", () => {
     expect(formatRequestCount(128394822, "en")).toBe("128.39M");
   });
+  // 跨档边界:截断而非四舍五入
+  test("en: 999,999 -> 999.99k (not 1000k)", () => {
+    expect(formatRequestCount(999999, "en")).toBe("999.99k");
+  });
   test("de: 12,340 -> 12,34 Tsd. (German branch preserved)", () => {
     expect(formatRequestCount(12340, "de")).toBe("12,34 Tsd.");
   });
@@ -333,10 +343,12 @@ export function formatRequestCount(n: number | undefined, locale = "en"): string
   if (n === undefined) return "\u2014";
   const loc = locale.toLowerCase().slice(0, 2);
   const trimZ = (s: string) => s.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+  // 截断到 2 位(不四舍五入),避免 999.999 跨档进位成 1000k
   const compact = (value: number, divisor: number, suffix: string): string => {
     const scaled = value / divisor;
-    if (Number.isInteger(scaled)) return `${scaled}${suffix}`;
-    return `${trimZ(scaled.toFixed(2))}${suffix}`;
+    const truncated = Math.floor(scaled * 100) / 100;
+    if (Number.isInteger(truncated)) return `${truncated}${suffix}`;
+    return `${trimZ(truncated.toFixed(2))}${suffix}`;
   };
   if (loc === "de") {
     const trimDe = (s: string) => s.replace(/\.0+$/, "").replace(".", ",");
@@ -478,3 +490,12 @@ Expected: 工作区干净,4 个提交(Task 1-4)。
 - **类型一致性**:`formatTokens` / `formatTokensExact` Task 1 产出,`CompactNumber` Task 2 消费;`formatRequestCount` Task 3 独立修改——签名一致。
 - **范围**:本 PR 只做格式化层,不动 Usage 页过滤/明细 UI(PR 3)、不动后端(PR 1 已完成)、不动货币格式。
 - **风险提示**:`formatTokens` 改造影响所有调用点(Logs 11 处、Usage 7 处、Dashboard 1 处),Task 1 Step 5 的构建验证 + Task 5 全量验证兜底;CJK/德语分支有回归测试。
+
+## 审查修订记录(2026-08-09,计划级审查后)
+
+| # | 严重度 | 发现 | 修订 |
+|---|---|---|---|
+| 1 | P1 | `compactWithPrecision` 用 `toFixed(2)` 会四舍五入跨档:999,999→1000K、99,999,999→100M、999,999,999→1B,违反 §12.1 规范 | 改为 `Math.floor(scaled*100)/100` 截断到 2 位;Task 1 增加跨档测试 case(99.99M/999.99M);Task 3 的 `formatRequestCount` 同步 |
+| 2 | P2 | 计划未明确 `formatTokensExact` 的负数/undefined 处理 | `formatTokensExact(0)→"0"` 已在测试;负数走 `Intl.NumberFormat` 自然输出,无需特殊处理(补充说明) |
+| 3 | P3 | Task 2 测试模式需与项目既有模式一致 | 已核实项目用 `renderToStaticMarkup`(models-empty-provider.test.tsx),计划写法正确,无需改 |
+| 4 | P1 | 计划测试期望写错两处:(a) `formatTokens(1000)` 我写成 "1K",但 formatTokens 是 1e4 阈值,1000 < 10K 原样显示 "1000"——§12.1 表格的 1K 基于 br() 的 1e3 阈值,与真实主格式化器 formatTokens(1e4)冲突,按 §12.3"阈值保持"裁决为原样;(b) zh 1234567 截断为 123.45万 而非四舍五入的 123.46万 | 测试期望改为 "1000" 与 "123.45万";决策记录:formatTokens 保持 1e4 阈值,§12.1 的 1K 行仅适用于 formatRequestCount(1e3 阈值) |
