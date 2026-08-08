@@ -379,6 +379,14 @@ git commit -m "feat(gui): add token trend chart to Usage page"
 
 **Files:** 无(仅命令 + 可能小修)
 
+- [ ] **Step 0: stale 响应防护验收(审查 P1,Task 1 修复后确认)**
+
+`useRequestHistory` 必须包含:
+- 竞态 guard:fetchPage 用序号 ref,旧响应返回时丢弃(过滤快速切换不出现"新过滤+旧数据")。
+- filtersRef:fetchPage 依赖 `[apiBase, filtersKey]` 而非 `filters` 对象引用(避免调用方内联 filters 造成无限重渲染)。
+
+验证:模拟慢请求 A + 快请求 B,断言最终 rows 是 B 的结果(手动或单测)。
+
 - [ ] **Step 1: GUI 全量测试**
 
 ```bash
