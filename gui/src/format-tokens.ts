@@ -18,9 +18,9 @@ function trimTrailingZeros(s: string): string {
  *  MUST floor-truncate to 2 decimals (not round): rounding makes 999.999 -> 1000,
  *  crossing into the next suffix tier (999,999 would show "1000K" instead of "999.99K"). */
 function compactWithPrecision(value: number, divisor: number, suffix: string): string {
-  const scaled = value / divisor;
-  // 截断到 2 位小数(不四舍五入),避免跨档进位。
-  const truncated = Math.floor(scaled * 100) / 100;
+  // 整数域截断(先乘后除):value * 100 在 token 量级(≤1e15)内是精确整数运算,
+  // 避免 (n/divisor)*100 的双精度下界误差(如 10030/1000*100 = 1002.9999…,floor 得 1002)。
+  const truncated = Math.floor((value * 100) / divisor) / 100;
   if (Number.isInteger(truncated)) return `${truncated}${suffix}`;
   const fixed = truncated.toFixed(2);
   return `${trimTrailingZeros(fixed)}${suffix}`;

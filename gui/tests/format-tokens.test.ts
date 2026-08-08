@@ -14,6 +14,12 @@ describe("formatTokens", () => {
   test("en: 12,340 -> 12.34K (2 decimals)", () => {
     expect(formatTokens(12340, "en")).toBe("12.34K");
   });
+  test("en: 10,030 -> 10.03K (no float floor error)", () => {
+    expect(formatTokens(10030, "en")).toBe("10.03K");
+  });
+  test("en: 10,200 -> 10.2K (trailing zero trimmed)", () => {
+    expect(formatTokens(10200, "en")).toBe("10.2K");
+  });
   test("en: 999,999 -> 999.99K (not rounded to 1M)", () => {
     expect(formatTokens(999999, "en")).toBe("999.99K");
   });
