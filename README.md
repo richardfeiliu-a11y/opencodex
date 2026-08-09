@@ -214,6 +214,8 @@ Report undisclosed vulnerabilities privately through
 [GitHub private vulnerability reporting](https://github.com/lidge-jun/opencodex/security/advisories/new),
 not a public issue.
 
+Internal project documentation (investigation notes, ADRs, plans, reports) lives under [`docs/`](./docs); see [`docs/README.md`](./docs/README.md) for the index.
+
 ## Development
 
 Source development requires the `bun` CLI on your `PATH`. This is separate from the published npm
