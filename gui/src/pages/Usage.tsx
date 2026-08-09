@@ -13,10 +13,13 @@ import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import { RequestHistoryTable } from "../components/RequestHistoryTable";
 import { TokenTrend } from "../components/TokenTrend";
-import { useRequestHistory, type UsageFilters } from "../hooks/useRequestHistory";
-
-type Range = "all" | "30d" | "7d";
-type UsageSurface = "all" | "codex" | "claude" | "grok";
+import {
+  useRequestHistory,
+  type Range,
+  type UsageFilters,
+  type UsageSurface,
+} from "../hooks/useRequestHistory";
+import { dateInputToLocalEnd, dateInputToLocalStart, tsToDateInput } from "../usage-date-utils";
 
 interface UsageSummaryTotals {
   requests: number;
@@ -209,6 +212,7 @@ export function UsageFilters({
   surface,
   range,
   filters,
+  providers,
   onSurface,
   onRange,
   onFilters,
@@ -217,12 +221,14 @@ export function UsageFilters({
   surface: UsageSurface;
   range: Range;
   filters: UsageFilters;
+  providers: string[];
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
   onFilters: (filters: UsageFilters) => void;
   t: TFn;
 }) {
   const setFilter = (patch: Partial<UsageFilters>) => onFilters({ ...filters, ...patch });
+  const providerSuggestions = Array.from(new Set(["openai", "claude", "grok", ...providers]));
   const statusChoices: { label: string; value?: string }[] = [
     { label: t("usage.filter.statusAll"), value: undefined },
     { label: "2xx", value: "2xx" },
@@ -277,17 +283,20 @@ export function UsageFilters({
         })}
       </div>
       <div className="usage-filter-row">
-        <select
+        <input
+          type="text"
+          list="usage-providers"
           className="usage-filter-select"
-          aria-label={t("usage.filter.providerAll")}
+          aria-label={t("usage.filter.provider")}
+          placeholder={t("usage.filter.providerAll")}
           value={filters.provider ?? ""}
           onChange={e => setFilter({ provider: e.target.value || undefined })}
-        >
-          <option value="">{t("usage.filter.providerAll")}</option>
-          {["openai", "claude", "grok"].map(provider => (
-            <option key={provider} value={provider}>{provider}</option>
+        />
+        <datalist id="usage-providers">
+          {providerSuggestions.map(provider => (
+            <option key={provider} value={provider} />
           ))}
-        </select>
+        </datalist>
         <input
           className="usage-filter-input"
           aria-label={t("usage.filter.model")}
@@ -309,15 +318,15 @@ export function UsageFilters({
           className="usage-filter-date"
           type="date"
           aria-label={t("usage.filter.from")}
-          value={filters.from ? new Date(filters.from).toISOString().slice(0, 10) : ""}
-          onChange={e => setFilter({ from: e.target.value ? Date.parse(e.target.value) : undefined })}
+          value={filters.from !== undefined ? tsToDateInput(filters.from) : ""}
+          onChange={e => setFilter({ from: e.target.value ? dateInputToLocalStart(e.target.value) : undefined })}
         />
         <input
           className="usage-filter-date"
           type="date"
           aria-label={t("usage.filter.to")}
-          value={filters.to ? new Date(filters.to).toISOString().slice(0, 10) : ""}
-          onChange={e => setFilter({ to: e.target.value ? Date.parse(e.target.value) : undefined })}
+          value={filters.to !== undefined ? tsToDateInput(filters.to) : ""}
+          onChange={e => setFilter({ to: e.target.value ? dateInputToLocalEnd(e.target.value) : undefined })}
         />
       </div>
     </div>
@@ -774,6 +783,7 @@ function UsageWorkspaceBody({
             loading={history.loading}
             error={history.error}
             loadMore={history.loadMore}
+            onRetry={history.retryFirstPage}
             t={t}
             locale={locale}
           />
@@ -836,7 +846,8 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
   const [filters, setFilters] = useState<UsageFilters>({});
-  const history = useRequestHistory(apiBase, filters);
+  // 明细与 Summary 共享 range/surface 语义:切换即清空旧明细并重拉第一页。
+  const history = useRequestHistory(apiBase, filters, range, surface);
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
     const params = new URLSearchParams({ range, surface });
@@ -893,6 +904,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
           surface={surface}
           range={range}
           filters={filters}
+          providers={(data?.providers ?? []).map(p => p.provider)}
           onSurface={setSurface}
           onRange={setRange}
           onFilters={setFilters}
