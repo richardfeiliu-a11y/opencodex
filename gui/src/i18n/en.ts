@@ -763,6 +763,13 @@ export const en = {
   "usage.dayFri": "Fri",
   "usage.heatmap.tooltipTokens": "{tokens} tokens",
   "usage.heatmap.tooltipRequests": "{requests} requests",
+  "usage.filter.provider": "Provider",
+  "usage.filter.providerAll": "All providers",
+  "usage.filter.model": "Model",
+  "usage.filter.status": "Status",
+  "usage.filter.statusAll": "All statuses",
+  "usage.filter.from": "From",
+  "usage.filter.to": "To",
 
   "nav.storage": "Storage",
   "storage.title": "Storage",

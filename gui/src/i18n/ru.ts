@@ -753,6 +753,13 @@ export const ru: Record<TKey, string> = {
   "usage.dayFri": "Пт",
   "usage.heatmap.tooltipTokens": "{tokens} токенов",
   "usage.heatmap.tooltipRequests": "{requests} запросов",
+  "usage.filter.provider": "Провайдер",
+  "usage.filter.providerAll": "Все провайдеры",
+  "usage.filter.model": "Модель",
+  "usage.filter.status": "Статус",
+  "usage.filter.statusAll": "Все статусы",
+  "usage.filter.from": "От",
+  "usage.filter.to": "До",
 
   "nav.storage": "Хранилище",
   "storage.title": "Хранилище",

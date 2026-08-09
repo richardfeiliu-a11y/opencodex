@@ -1267,6 +1267,13 @@ export const de: Record<TKey, string> = {
   "usage.dayFri": "Fr",
   "usage.heatmap.tooltipTokens": "{tokens} Tokens",
   "usage.heatmap.tooltipRequests": "{requests} Anfragen",
+  "usage.filter.provider": "Anbieter",
+  "usage.filter.providerAll": "Alle Anbieter",
+  "usage.filter.model": "Modell",
+  "usage.filter.status": "Status",
+  "usage.filter.statusAll": "Alle Status",
+  "usage.filter.from": "Von",
+  "usage.filter.to": "Bis",
 
   "nav.storage": "Speicher",
   "storage.title": "Speicher",

@@ -721,6 +721,13 @@ export const ja: Record<TKey, string> = {
   "usage.dayFri": "金",
   "usage.heatmap.tooltipTokens": "{tokens} トークン",
   "usage.heatmap.tooltipRequests": "{requests} リクエスト",
+  "usage.filter.provider": "プロバイダー",
+  "usage.filter.providerAll": "すべてのプロバイダー",
+  "usage.filter.model": "モデル",
+  "usage.filter.status": "ステータス",
+  "usage.filter.statusAll": "すべてのステータス",
+  "usage.filter.from": "開始日",
+  "usage.filter.to": "終了日",
 
   "nav.storage": "ストレージ",
   "storage.title": "ストレージ",

@@ -1287,6 +1287,13 @@ export const zh: Record<TKey, string> = {
   "usage.dayFri": "五",
   "usage.heatmap.tooltipTokens": "{tokens} 令牌",
   "usage.heatmap.tooltipRequests": "{requests} 请求",
+  "usage.filter.provider": "提供方",
+  "usage.filter.providerAll": "全部提供方",
+  "usage.filter.model": "模型",
+  "usage.filter.status": "状态",
+  "usage.filter.statusAll": "全部状态",
+  "usage.filter.from": "开始日期",
+  "usage.filter.to": "结束日期",
 
   "nav.storage": "存储",
   "storage.title": "存储",

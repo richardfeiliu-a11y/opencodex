@@ -1294,6 +1294,13 @@ export const ko: Record<TKey, string> = {
   "usage.dayFri": "금",
   "usage.heatmap.tooltipTokens": "{tokens} 토큰",
   "usage.heatmap.tooltipRequests": "{requests} 요청",
+  "usage.filter.provider": "제공자",
+  "usage.filter.providerAll": "모든 제공자",
+  "usage.filter.model": "모델",
+  "usage.filter.status": "상태",
+  "usage.filter.statusAll": "모든 상태",
+  "usage.filter.from": "시작일",
+  "usage.filter.to": "종료일",
 
   "nav.storage": "저장소",
   "storage.title": "저장소",
