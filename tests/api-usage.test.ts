@@ -269,6 +269,33 @@ describe("GET /api/usage", () => {
     }
   });
 
+  test("accepts status class 2xx and counts only 2xx entries", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?range=all&status=2xx", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.filters).toEqual({ status: "2xx" });
+      // fixture:status=200 的只有 ocx-old 和 ocx-recent 两条(ocx-missing 为 503)
+      expect(body.summary.requests).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects status class 6xx", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?status=6xx", server.url));
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error?: { code?: string } };
+      expect(body.error?.code).toBe("invalid_status");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("rejects invalid status", async () => {
     const server = startServer(0);
     try {

@@ -195,11 +195,15 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     if (model) filters.model = model;
     const statusRaw = url.searchParams.get("status");
     if (statusRaw !== null) {
-      const status = Number(statusRaw);
-      if (!Number.isInteger(status) || status < 100 || status > 599) {
-        return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599" } }, 400, req, config);
+      if (/^[1-5]xx$/.test(statusRaw)) {
+        filters.status = statusRaw as "2xx" | "3xx" | "4xx" | "5xx";
+      } else {
+        const status = Number(statusRaw);
+        if (!Number.isInteger(status) || status < 100 || status > 599) {
+          return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599 or a class like 2xx" } }, 400, req, config);
+        }
+        filters.status = status;
       }
-      filters.status = status;
     }
     const fromRaw = url.searchParams.get("from");
     if (fromRaw !== null) {

@@ -6,12 +6,13 @@ import { estimateComboCost, estimateRequestCost, serviceTierContext } from "./co
 
 export type UsageRange = "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude" | "grok";
+export type StatusClass = "2xx" | "3xx" | "4xx" | "5xx";
 
 /** 可选过滤条件,语义与 request-history indexer 一致:顶层精确匹配,不含 attempts。 */
 export interface UsageSummaryFilters {
   provider?: string;
   model?: string;
-  status?: number;
+  status?: number | StatusClass;
   from?: number;
   to?: number;
 }
@@ -575,7 +576,14 @@ export function summarizeUsage(
     // surface 分支会直接 return,放后面会导致 surface ≠ "all" 时过滤被静默忽略。
     if (filters?.provider !== undefined && entry.provider !== filters.provider) return false;
     if (filters?.model !== undefined && entry.model !== filters.model) return false;
-    if (filters?.status !== undefined && entry.status !== filters.status) return false;
+    if (filters?.status !== undefined) {
+      if (typeof filters.status === "number") {
+        if (entry.status !== filters.status) return false;
+      } else {
+        const tier = Number(filters.status[0]); // "2xx" -> 2
+        if (Math.floor(entry.status / 100) !== tier) return false;
+      }
+    }
     if (filters?.from !== undefined && entry.timestamp < filters.from) return false;
     if (filters?.to !== undefined && entry.timestamp > filters.to) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";

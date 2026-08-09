@@ -732,6 +732,25 @@ describe("summarizeUsage filters", () => {
     expect(s.summary.requests).toBe(1); // c
   });
 
+  test("filters by status class (2xx matches 2xx, excludes 3xx/4xx)", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { status: "2xx" });
+    // a(200), b(200), d(200), e(200) 命中;c(503) 排除
+    expect(s.summary.requests).toBe(4);
+    expect(s.summary.totalTokens).toBe(60);
+  });
+
+  test("status class 5xx matches only 5xx", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { status: "5xx" });
+    expect(s.summary.requests).toBe(1); // c(503)
+  });
+
+  test("exact integer status still matches exactly (no regression)", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { status: 200 });
+    expect(s.summary.requests).toBe(4); // a, b, d, e
+    const s503 = summarizeUsage(entries, "all", F, "all", { status: 503 });
+    expect(s503.summary.requests).toBe(1);
+  });
+
   test("filters by from/to timestamp", () => {
     const s = summarizeUsage(entries, "all", F, "all", { from: F - 1, to: F });
     expect(s.summary.requests).toBe(3); // a, b, c (d, e older than from)

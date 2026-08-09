@@ -247,12 +247,34 @@ describe("request-history index (RI-02)", () => {
     expect(byProvider.rows.map(row => row.requestId).sort()).toEqual(["f1", "f3"]);
     const byStatus = await queryRequestHistory({ status: 429 }, undefined, 10);
     expect(byStatus.rows.map(row => row.requestId)).toEqual(["f2"]);
+    const byStatusClass = await queryRequestHistory({ status: "4xx" }, undefined, 10);
+    expect(byStatusClass.rows.map(row => row.requestId)).toEqual(["f2"]);
+    const byStatusClassEmpty = await queryRequestHistory({ status: "2xx" }, undefined, 10);
+    // f1/f3 默认 status=200,属于 2xx;timestamp 倒序 f3 在前
+    expect(byStatusClassEmpty.rows.map(row => row.requestId)).toEqual(["f3", "f1"]);
     const byConversation = await queryRequestHistory({ conversationId: "conv-1" }, undefined, 10);
     expect(byConversation.rows.map(row => row.requestId)).toEqual(["f1"]);
     const bySurface = await queryRequestHistory({ surface: "grok" }, undefined, 10);
     expect(bySurface.rows.map(row => row.requestId)).toEqual(["f3"]);
     const byRange = await queryRequestHistory({ from: 1500, to: 2500 }, undefined, 10);
     expect(byRange.rows.map(row => row.requestId)).toEqual(["f2"]);
+  });
+
+  test("status class 2xx filters rows by status tier through the API", async () => {
+    appendUsageEntry(entry("g1", 1000, "a", "m1", { status: 201 }));
+    appendUsageEntry(entry("g2", 2000, "a", "m1", { status: 204 }));
+    appendUsageEntry(entry("g3", 3000, "a", "m1", { status: 302 }));
+    appendUsageEntry(entry("g4", 4000, "a", "m1", { status: 500 }));
+    await rebuildRequestHistoryIndex();
+    const res = await apiGet("/api/request-history?status=2xx");
+    expect(res.status).toBe(200);
+    const body = await res.json() as { entries?: Array<{ requestId?: string }>; hasMore?: boolean };
+    expect(body.entries?.map(e => e.requestId).sort()).toEqual(["g1", "g2"]);
+    // 非法大类(6xx)走 400 invalid_status
+    const bad = await apiGet("/api/request-history?status=6xx");
+    expect(bad.status).toBe(400);
+    const badBody = await bad.json() as { error?: { code?: string } };
+    expect(badBody.error?.code).toBe("invalid_status");
   });
 
   test("row-by-id returns the canonical entry and unknown ids 404 through the API", async () => {

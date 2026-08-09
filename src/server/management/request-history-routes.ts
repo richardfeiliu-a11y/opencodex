@@ -47,13 +47,20 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
   if (!url.pathname.startsWith("/api/request-history")) return null;
 
   if (url.pathname === "/api/request-history" && req.method === "GET") {
-    const statusRaw = parseQueryInt(url.searchParams.get("status"));
-    if (statusRaw === "invalid") {
-      return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599" } }, 400, req, config);
-    }
-    const status = statusRaw;
-    if (status !== undefined && (status < 100 || status > 599)) {
-      return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599" } }, 400, req, config);
+    const statusRaw = url.searchParams.get("status");
+    const statusClass = statusRaw !== null && /^[1-5]xx$/.test(statusRaw) ? statusRaw : undefined;
+    let status: number | "2xx" | "3xx" | "4xx" | "5xx" | undefined;
+    if (statusClass !== undefined) {
+      status = statusClass as "2xx" | "3xx" | "4xx" | "5xx";
+    } else {
+      const statusInt = parseQueryInt(statusRaw);
+      if (statusInt === "invalid") {
+        return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599 or a class like 2xx" } }, 400, req, config);
+      }
+      status = statusInt;
+      if (status !== undefined && (status < 100 || status > 599)) {
+        return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599 or a class like 2xx" } }, 400, req, config);
+      }
     }
     const fromRaw = parseQueryInt(url.searchParams.get("from"));
     if (fromRaw === "invalid") {
