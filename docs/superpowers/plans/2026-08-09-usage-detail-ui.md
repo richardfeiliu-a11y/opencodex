@@ -422,6 +422,95 @@ Expected: 工作区干净,4 个提交(Task 1-4)。
 
 ---
 
+### Task 5b: 后端 status 大类匹配(方案 B,用户裁决)
+
+**Files:**
+- Modify: `src/usage/summary.ts`(578 行 status 谓词)
+- Modify: `src/server/management/request-history-routes.ts`(status 解析)
+- Modify: `src/routing/history/indexer.ts`(queryRows status 过滤)
+- Test: `tests/usage-summary.test.ts`、`tests/api-usage.test.ts`、request-history 相关测试
+
+**Interfaces:**
+- Consumes: 现有 `UsageSummaryFilters.status?: number`、`RequestHistoryFilters.status?: number`
+- Produces: `status` 参数接受 `"2xx"|"3xx"|"4xx"|"5xx"` 字符串大类(区间匹配)或 100-599 整数(精确匹配)
+
+- [ ] **Step 1: 契约(全端统一)**
+
+`status` 查询参数取值:
+- `"2xx"` / `"3xx"` / `"4xx"` / `"5xx"`:大类区间匹配(如 "2xx" = status ∈ [200, 300))。
+- 100-599 整数:精确匹配(现状不变)。
+- 其他值:400 `invalid_status`。
+
+类型:`UsageSummaryFilters.status` 与 `RequestHistoryFilters.status` 改为 `number | "2xx" | "3xx" | "4xx" | "5xx"`。
+
+- [ ] **Step 2: summary.ts 谓词**
+
+```ts
+if (filters?.status !== undefined) {
+  if (typeof filters.status === "number") {
+    if (entry.status !== filters.status) return false;
+  } else {
+    const tier = Number(filters.status[0]); // "2xx" -> 2
+    if (Math.floor(entry.status / 100) !== tier) return false;
+  }
+}
+```
+
+- [ ] **Step 3: request-history-routes.ts 解析**
+
+先检查 `/^[1-5]xx$/`(大类),匹配则传字符串;否则走 parseQueryInt + 100-599 校验。
+
+- [ ] **Step 4: indexer.ts queryRows**
+
+`filters.status` 为字符串大类时,SQL 用 `status >= ${tier*100} AND status < ${tier*100+100}`;为数字时保持 `status = ?`。
+
+- [ ] **Step 5: 测试**
+
+- summary 单测:"2xx" 匹配 200/201/204、排除 300/400。
+- api-usage 路由测试:status=2xx 返回 200 且计数正确;status=6xx 返回 400。
+- request-history 测试:"2xx" 大类过滤行数正确。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add src/usage/summary.ts src/server/management/request-history-routes.ts src/routing/history/indexer.ts tests/
+git commit -m "feat(usage): support status class (2xx/4xx/5xx) filtering on /api/usage and /api/request-history"
+```
+
+---
+
+### Task 5c: 前端 status 大类传参(方案 B)
+
+**Files:**
+- Modify: `gui/src/pages/Usage.tsx`(statusChoices 值)
+- Modify: `gui/src/hooks/useRequestHistory.ts`(UsageFilters.status 类型)
+- Test: `gui/tests/usage-filter-bar.test.tsx`(更新断言)
+
+**Interfaces:**
+- Consumes: Task 5b 的 status 契约(`"2xx"` 等字符串)
+- Produces: 前端下拉传 `"2xx"|"4xx"|"5xx"` 字符串,`useRequestHistory` 直接序列化
+
+- [ ] **Step 1: statusChoices 值改为字符串**
+
+`Usage.tsx` 226 行:`statusChoices` 的 `value` 从 `200/400/500` 改为 `"2xx"/"4xx"/"5xx"`。
+
+- [ ] **Step 2: useRequestHistory 类型**
+
+`UsageFilters.status?: number` → `status?: number | "2xx" | "4xx" | "5xx"`;`buildHistoryUrl` 的 `params.set("status", String(filters.status))` 对字符串直接生效。
+
+- [ ] **Step 3: 测试更新**
+
+`usage-filter-bar.test.tsx`:断言 URL 含 `status=2xx` 而非 `status=200`。
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add gui/src/pages/Usage.tsx gui/src/hooks/useRequestHistory.ts gui/tests/usage-filter-bar.test.tsx
+git commit -m "feat(gui): send status class (2xx/4xx/5xx) to usage and history APIs"
+```
+
+---
+
 ## Self-Review(写作自查)
 
 - **Spec 覆盖**:§9.3 一致性(过滤驱动五面板)✅ Task 2+3+5;§11 分页(游标/重置/stale)✅ Task 1;§10.2 字段映射(明细表列)✅ Task 3;§12 格式化(CompactNumber 复用)✅ Task 3;趋势 ✅ Task 4。
