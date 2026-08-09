@@ -765,7 +765,7 @@ function UsageWorkspaceBody({
       meta: history.hasMore ? `${history.rows.length}+` : `${history.rows.length}`,
       body: (
         <section aria-labelledby={sectionAnchorId("usage", "requests")}>
-          <h3 className="panel-title">{t("usage.section.requests")}</h3>
+          <h3 id={sectionAnchorId("usage", "requests")} className="panel-title">{t("usage.section.requests")}</h3>
           <RequestHistoryTable
             rows={history.rows}
             hasMore={history.hasMore}

@@ -70,10 +70,7 @@ export function RequestHistoryTable({
 
   if (rows.length === 0) {
     return (
-      <>
-        {error && rows.length > 0 && <Notice tone="err">{t("usage.requests.loadError")}</Notice>}
-        <EmptyState title={t("logs.noRequests")} />
-      </>
+      <EmptyState title={t("logs.noRequests")} />
     );
   }
 
