@@ -18,11 +18,11 @@ OpenCodex 本地 Web GUI 的 Usage 页面存在三类体验短板,本次开发�
 | 缺少请求明细与过滤 | Summary 聚合只有 range/surface 两维,无 provider/model/status/时间区间过滤,无请求明细 | `/api/usage` 支持五类过滤参数,页面新增请求明细表与过滤条 |
 | 缺趋势视图 | 只有热力图与 daybar,无按天 token 趋势 | 手写 SVG 趋势图(基于过滤后 days[]) |
 
-Phase 1 研究报告来自 `/Users/fei/projects/Opencodex/opencodex dev/` 目录,共三份:
+Phase 1 研究文档已整合至本目录,共三份:
 
-- `opencodex_usage_analytics_phase1_research_prompt.md` — 研究任务书
-- `opencodex_usage_analytics_phase1_research_report.md` — 研究报告(含 §8.3 过滤设计、§9.3 一致性规则、§12 格式化规范)
-- `opencodex_usage_analytics_phase1_review_response.md` — 对独立审查 6 项发现(P1×2/P2×3/P3×1)的逐项回复与修订记录
+- [研究提示](usage-analytics-phase1-research-prompt-2026-08-08.md) — 研究任务书
+- [研究报告](usage-analytics-phase1-research-report-2026-08-08.md) — 研究报告(含 §8.3 过滤设计、§9.3 一致性规则、§12 格式化规范)
+- [审查回复](usage-analytics-phase1-research-review-response-2026-08-08.md) — 对独立审查 6 项发现(P1×2/P2×3/P3×1)的逐项回复与修订记录
 
 开发实施依据三份计划文档(`docs/superpowers/plans/`),对应三个 PR;结项验收依据 `.superpowers/sdd/2026-08-09-usage-detail-ui/` 下的验证报告与 progress.md(ledger)。
 
