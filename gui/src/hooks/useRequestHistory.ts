@@ -64,7 +64,9 @@ export function useRequestHistory(
   const seqRef = useRef(0);
   const filtersKey = JSON.stringify(filters);
   const filtersRef = useRef(filters);
-  filtersRef.current = filters;
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
 
   const fetchPage = useCallback(async (c: string | undefined) => {
     const seq = ++seqRef.current;
@@ -86,14 +88,15 @@ export function useRequestHistory(
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
-  }, [apiBase, filtersKey]);
+  }, [apiBase]);
 
   // 过滤条件变化 => 重置游标与列表
   useEffect(() => {
     seqRef.current++; // 作废在途旧请求
     activeCursor.current = undefined;
-    setRows([]);
-    void fetchPage(undefined);
+    // 微任务延迟：setState 移出 effect 同步体，避免级联渲染；且不像定时器可被 cleanup 取消，
+    // 保证 StrictMode 下请求必然发出（seq 校验保证只有最后一次生效）。
+    void Promise.resolve().then(() => { void fetchPage(undefined); });
   }, [filtersKey, fetchPage]);
 
   const loadMore = useCallback(() => {
