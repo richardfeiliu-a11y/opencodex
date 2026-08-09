@@ -708,6 +708,7 @@ export const de: Record<TKey, string> = {
   "usage.card.cacheWriteTokens": "Cache-Schreiben",
   "usage.card.coverage": "Abdeckung",
   "usage.card.activeDays": "Aktive Tage",
+  "usage.trend.title": "Token-Trend",
   "usage.section.heatmap": "Tägliche Aktivität",
   "usage.section.overview": "Übersicht",
   "usage.section.models": "Modelle",

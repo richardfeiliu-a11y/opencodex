@@ -729,6 +729,7 @@ export const ru: Record<TKey, string> = {
   "usage.card.cacheWriteTokens": "записи в кэш",
   "usage.card.coverage": "Покрытие",
   "usage.card.activeDays": "Активные дни",
+  "usage.trend.title": "Динамика токенов",
   "usage.section.heatmap": "Активность по дням",
   "usage.section.overview": "Обзор",
   "usage.section.models": "Модели",

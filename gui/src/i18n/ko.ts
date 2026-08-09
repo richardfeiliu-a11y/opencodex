@@ -730,6 +730,7 @@ export const ko: Record<TKey, string> = {
   "usage.card.cacheWriteTokens": "캐시 생성",
   "usage.card.coverage": "커버리지",
   "usage.card.activeDays": "활동일",
+  "usage.trend.title": "토큰 추세",
   "usage.section.heatmap": "일별 활동",
   "usage.section.overview": "개요",
   "usage.section.models": "모델",

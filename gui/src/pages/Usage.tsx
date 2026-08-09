@@ -12,6 +12,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import { RequestHistoryTable } from "../components/RequestHistoryTable";
+import { TokenTrend } from "../components/TokenTrend";
 import { useRequestHistory, type UsageFilters } from "../hooks/useRequestHistory";
 
 type Range = "all" | "30d" | "7d";
@@ -739,6 +740,7 @@ function UsageWorkspaceBody({
       body: data ? (
         <>
           <UsageSummaryCards summary={data.summary} activeDays={activeDays} locale={locale} t={t} />
+          <TokenTrend days={data.days} locale={locale} t={t} />
           <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
         </>
       ) : null,
