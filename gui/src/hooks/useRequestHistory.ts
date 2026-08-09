@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export interface UsageFilters {
   provider?: string;
   model?: string;
-  status?: number;
+  status?: "2xx" | "4xx" | "5xx";
   from?: number;
   to?: number;
 }

@@ -90,7 +90,7 @@ describe("UsageFilters", () => {
         .find(sel => (sel as HTMLSelectElement).options[0]?.textContent === "All statuses") as HTMLSelectElement;
       expect(statusSelect).not.toBeNull();
       await act(async () => {
-        statusSelect.value = "400";
+        statusSelect.value = "4xx";
         statusSelect.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
       });
 
@@ -99,7 +99,7 @@ describe("UsageFilters", () => {
       // the status filter instead of relying on request order.
       const usageUrls = requestedUrls.filter(url => url.includes("/api/usage?"));
       expect(usageUrls.length).toBeGreaterThan(0);
-      expect(usageUrls.some(url => url.includes("status=400"))).toBe(true);
+      expect(usageUrls.some(url => url.includes("status=4xx"))).toBe(true);
     } finally {
       await act(async () => { root.unmount(); });
       container.remove();

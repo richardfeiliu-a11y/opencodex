@@ -223,11 +223,11 @@ export function UsageFilters({
   t: TFn;
 }) {
   const setFilter = (patch: Partial<UsageFilters>) => onFilters({ ...filters, ...patch });
-  const statusChoices: { label: string; value?: number }[] = [
+  const statusChoices: { label: string; value?: string }[] = [
     { label: t("usage.filter.statusAll"), value: undefined },
-    { label: "2xx", value: 200 },
-    { label: "4xx", value: 400 },
-    { label: "5xx", value: 500 },
+    { label: "2xx", value: "2xx" },
+    { label: "4xx", value: "4xx" },
+    { label: "5xx", value: "5xx" },
   ];
   return (
     <div className="usage-filters">
@@ -299,7 +299,7 @@ export function UsageFilters({
           className="usage-filter-select"
           aria-label={t("usage.filter.status")}
           value={filters.status ?? ""}
-          onChange={e => setFilter({ status: e.target.value === "" ? undefined : Number(e.target.value) })}
+          onChange={e => setFilter({ status: e.target.value === "" ? undefined : (e.target.value as UsageFilters["status"]) })}
         >
           {statusChoices.map(choice => (
             <option key={choice.label} value={choice.value ?? ""}>{choice.label}</option>
