@@ -61,29 +61,36 @@ export function useRequestHistory(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | undefined>(undefined);
   const activeCursor = useRef<string | undefined>(undefined);
+  const seqRef = useRef(0);
   const filtersKey = JSON.stringify(filters);
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
 
   const fetchPage = useCallback(async (c: string | undefined) => {
+    const seq = ++seqRef.current;
     setLoading(true);
     setError(undefined);
     try {
-      const res = await fetch(buildHistoryUrl(apiBase, filters, c));
+      const res = await fetch(buildHistoryUrl(apiBase, filtersRef.current, c));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = await res.json();
+      if (seq !== seqRef.current) return; // 旧响应丢弃
       const nextRows: HistoryEntry[] = body.entries ?? [];
       if (c === undefined) setRows(nextRows);
       else setRows(prev => [...prev, ...nextRows]);
       setHasMore(!!body.nextCursor);
       activeCursor.current = body.nextCursor;
     } catch (e) {
+      if (seq !== seqRef.current) return;
       setError(e instanceof Error ? e : new Error(String(e)));
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) setLoading(false);
     }
-  }, [apiBase, filtersKey, filters]);
+  }, [apiBase, filtersKey]);
 
   // 过滤条件变化 => 重置游标与列表
   useEffect(() => {
+    seqRef.current++; // 作废在途旧请求
     activeCursor.current = undefined;
     setRows([]);
     void fetchPage(undefined);
@@ -95,6 +102,7 @@ export function useRequestHistory(
   }, [loading, fetchPage]);
 
   const reset = useCallback(() => {
+    seqRef.current++; // 作废在途旧请求
     activeCursor.current = undefined;
     setRows([]);
     void fetchPage(undefined);
