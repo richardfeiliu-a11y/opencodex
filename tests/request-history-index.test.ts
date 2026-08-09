@@ -260,6 +260,27 @@ describe("request-history index (RI-02)", () => {
     expect(byRange.rows.map(row => row.requestId)).toEqual(["f2"]);
   });
 
+  test("surface semantics: codex matches NULL, claude matches both, grok exact, other values exact", async () => {
+    appendUsageEntry(entry("s1", 1000, "a", "m1", {})); // surface 未写 => NULL
+    appendUsageEntry(entry("s2", 2000, "a", "m1", { surface: "claude" }));
+    appendUsageEntry(entry("s3", 3000, "a", "m1", { surface: "claude-desktop" }));
+    appendUsageEntry(entry("s4", 4000, "a", "m1", { surface: "grok" }));
+    await rebuildRequestHistoryIndex();
+
+    // codex 请求不打 surface 字段(IS NULL)
+    const codex = await queryRequestHistory({ surface: "codex" }, undefined, 10);
+    expect(codex.rows.map(row => row.requestId)).toEqual(["s1"]);
+    // claude 包含 claude-desktop
+    const claude = await queryRequestHistory({ surface: "claude" }, undefined, 10);
+    expect(claude.rows.map(row => row.requestId).sort()).toEqual(["s2", "s3"]);
+    // grok 精确匹配
+    const grok = await queryRequestHistory({ surface: "grok" }, undefined, 10);
+    expect(grok.rows.map(row => row.requestId)).toEqual(["s4"]);
+    // 其他字符串(claude-desktop 不在 codex/claude/grok 三个语义分支内)保持精确匹配,向后兼容
+    const claudeDesktop = await queryRequestHistory({ surface: "claude-desktop" }, undefined, 10);
+    expect(claudeDesktop.rows.map(row => row.requestId)).toEqual(["s3"]);
+  });
+
   test("status class 2xx filters rows by status tier through the API", async () => {
     appendUsageEntry(entry("g1", 1000, "a", "m1", { status: 201 }));
     appendUsageEntry(entry("g2", 2000, "a", "m1", { status: 204 }));

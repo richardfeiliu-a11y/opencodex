@@ -506,7 +506,18 @@ function queryRows(
     }
   }
   if (filters.conversationId !== undefined) add("conversation_id = ?", filters.conversationId);
-  if (filters.surface !== undefined) add("surface = ?", filters.surface);
+  // surface 语义化,与 usageEntryMatchesSurface 对齐:
+  // codex 请求不打 surface 字段(IS NULL);claude 包含 claude-desktop;
+  // grok 精确匹配;其他字符串(如 claude-desktop、自定义值)保持精确匹配向后兼容。
+  if (filters.surface === "codex") {
+    where.push("surface IS NULL");
+  } else if (filters.surface === "claude") {
+    where.push("surface IN ('claude', 'claude-desktop')");
+  } else if (filters.surface === "grok") {
+    add("surface = ?", filters.surface);
+  } else if (filters.surface !== undefined) {
+    add("surface = ?", filters.surface);
+  }
   if (filters.inboundProtocol !== undefined) add("inbound_protocol = ?", filters.inboundProtocol);
   if (filters.apiKeyId !== undefined) add("api_key_id = ?", filters.apiKeyId);
   if (filters.profileId !== undefined) add("profile_id = ?", filters.profileId);

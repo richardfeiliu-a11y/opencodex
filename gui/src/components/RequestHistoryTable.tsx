@@ -11,6 +11,8 @@ interface RequestHistoryTableProps {
   loading: boolean;
   error?: Error;
   loadMore: () => void;
+  /** 错误态重试:清空并重拉第一页(reset/retryFirstPage)。 */
+  onRetry: () => void;
   t: TFn;
   locale: Locale;
 }
@@ -54,6 +56,7 @@ export function RequestHistoryTable({
   loading,
   error,
   loadMore,
+  onRetry,
   t,
   locale,
 }: RequestHistoryTableProps): JSX.Element {
@@ -61,7 +64,7 @@ export function RequestHistoryTable({
     return (
       <Notice tone="err">
         {t("usage.requests.loadError")}{" "}
-        <button type="button" className="btn btn-ghost btn-sm" onClick={loadMore}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>
           {t("common.retry")}
         </button>
       </Notice>
