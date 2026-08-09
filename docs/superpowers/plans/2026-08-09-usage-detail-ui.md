@@ -524,3 +524,63 @@ git commit -m "feat(gui): send status class (2xx/4xx/5xx) to usage and history A
 1. **Status 过滤粒度**:下拉用 2xx/4xx/5xx 大类还是具体码?计划先做大类(2xx/4xx/5xx),后端 PR 1 支持具体码,前端可后续细化。
 2. **明细表位置**:作为 Usage 页新 section(Models/Providers 下方)还是独立 tab?计划先做同页 section(最小改动)。
 3. **趋势序列**:只做 total(计划),input/output/cache 分序列 defer。
+
+---
+
+### Task 6a: useRequestHistory 与 Summary 语义对齐 + 重置/重试修复
+
+**Files:**
+- Modify: `src/routing/history/indexer.ts`(surface 语义化,与 usage 对齐)
+- Modify: `gui/src/hooks/useRequestHistory.ts`(接收 range/surface;重置 rows/hasMore/error;暴露 retryFirstPage/reset)
+- Modify: `gui/src/components/RequestHistoryTable.tsx`(错误态按钮用 retryFirstPage/reset 而非 loadMore)
+- Test: `gui/tests/use-request-history.test.ts`、`tests/request-history-index.test.ts`、`gui/tests/usage-filter-bar.test.tsx`(联动)
+
+**背景(用户反馈 5 问题中的 1/4/5):**
+1. 明细不接收 range/surface,与 Summary 不一致。
+4. 过滤切换只重置游标,未清空旧数据(新请求期间/失败后仍显示上一组结果)。
+5. 首次加载失败时 Retry 调 loadMore(无 cursor 不发起)。
+
+**契约:**
+- `useRequestHistory(apiBase, filters, range, surface)`:
+  - `range`("all"|"30d"|"7d")→ `from`(all 不传;30d/7d = now - N 天),仅当 `filters.from` 未设时生效(与 usage 的 from/to 优先语义一致)。
+  - `surface`("all"|"codex"|"claude"|"grok")→ 传给后端:
+    - "all" → 不传
+    - "codex" → `surface=codex`(后端语义化:匹配 surface IS NULL)
+    - "claude" → `surface=claude`(后端语义化:匹配 surface IN ('claude','claude-desktop'))
+    - "grok" → `surface=grok`(精确)
+- 后端 `indexer.ts` queryRows surface 过滤语义化(与 `usageEntryMatchesSurface` 对齐):codex → `surface IS NULL`;claude → `surface IN ('claude','claude-desktop')`;grok → `surface = 'grok'`;其他字符串仍精确匹配(向后兼容)。
+- 过滤切换(effect)时重置 `rows=[]`、`hasMore=false`、`error=undefined`(用微任务包装满足 lint,仓库先例)。
+- 暴露 `retryFirstPage()`(等价 reset:清状态 + 拉第一页),`RequestHistoryTable` 错误态按钮改用它。
+
+**测试:**
+- hook 序列化:range→from 转换(7d/30d/all)、surface 转换(all/codex/claude/grok)、from/to 优先于 range。
+- 过滤切换旧数据清理(模拟慢请求,断言切换后旧 rows 不残留)。
+- 首次失败重试(retryFirstPage 发起第一页请求)。
+- 后端 indexer surface 语义(codex IS NULL / claude IN 两值 / grok 精确)。
+
+提交:`feat(usage): align request-history surface semantics and fix hook reset/retry`
+
+---
+
+### Task 6b: Provider 动态选项 + 日期本地日初/日末
+
+**Files:**
+- Modify: `gui/src/pages/Usage.tsx`(Provider 下拉 + 日期转换)
+- Test: `gui/tests/usage-filter-bar.test.tsx`
+
+**背景(用户反馈 5 问题中的 2/3):**
+2. Provider 下拉硬编码 openai/claude/grok,用户配置的其他 Provider 无法选择。
+3. 日期 `Date.parse("YYYY-MM-DD")` = UTC 00:00,后端 `timestamp <= to` 排除所选日期当天大部分请求;显示用 toISOString 也有时区偏移。
+
+**契约:**
+- Provider 选项:改为可输入 datalist(输入框 + 建议列表),建议来源 = 静态 `["openai","claude","grok"]` 与 `data.providers`(过滤后真实 Provider)的并集去重;允许自由输入任意 Provider(用户配置的都能选)。
+- 日期转换:
+  - from 输入 `"YYYY-MM-DD"` → 本地日初 `new Date(y, m, d, 0, 0, 0, 0).getTime()`。
+  - to 输入 `"YYYY-MM-DD"` → 本地日末 `new Date(y, m, d, 23, 59, 59, 999).getTime()`。
+  - 回读显示用本地日期(getFullYear/getMonth/getDate 拼接),不用 toISOString。
+
+**测试:**
+- Provider:自定义 provider 可输入并序列化。
+- 日期:from/to 转换落在本地日初/日末(用固定时区断言或校验 getTime 边界);回读显示与输入一致。
+
+提交:`feat(gui): dynamic provider options and local-day date bounds in Usage filters`
