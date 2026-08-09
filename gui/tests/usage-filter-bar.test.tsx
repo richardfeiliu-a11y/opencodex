@@ -94,9 +94,12 @@ describe("UsageFilters", () => {
         statusSelect.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
       });
 
-      const filteredUrl = requestedUrls[requestedUrls.length - 1];
-      expect(filteredUrl).toContain("/api/usage?");
-      expect(filteredUrl).toContain("status=400");
+      // The same filters now also drive the request-history request, so the usage URL
+      // is no longer guaranteed to be the last one fetched. Assert it exists and carries
+      // the status filter instead of relying on request order.
+      const usageUrls = requestedUrls.filter(url => url.includes("/api/usage?"));
+      expect(usageUrls.length).toBeGreaterThan(0);
+      expect(usageUrls.some(url => url.includes("status=400"))).toBe(true);
     } finally {
       await act(async () => { root.unmount(); });
       container.remove();

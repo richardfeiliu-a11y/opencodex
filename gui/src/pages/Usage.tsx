@@ -11,7 +11,8 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
-import type { UsageFilters } from "../hooks/useRequestHistory";
+import { RequestHistoryTable } from "../components/RequestHistoryTable";
+import { useRequestHistory, type UsageFilters } from "../hooks/useRequestHistory";
 
 type Range = "all" | "30d" | "7d";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -711,6 +712,7 @@ function UsageWorkspaceBody({
   modelQuery,
   onModelQuery,
   sortedProviders,
+  history,
   range,
   locale,
   t,
@@ -723,6 +725,7 @@ function UsageWorkspaceBody({
   modelQuery: string;
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
+  history: ReturnType<typeof useRequestHistory>;
   range: Range;
   locale: Locale;
   t: TFn;
@@ -755,6 +758,25 @@ function UsageWorkspaceBody({
       body: data
         ? <UsageProvidersTable providers={sortedProviders} locale={locale} t={t} workspace />
         : null,
+    },
+    {
+      id: "requests",
+      label: t("usage.section.requests"),
+      meta: history.hasMore ? `${history.rows.length}+` : `${history.rows.length}`,
+      body: (
+        <section aria-labelledby={sectionAnchorId("usage", "requests")}>
+          <h3 className="panel-title">{t("usage.section.requests")}</h3>
+          <RequestHistoryTable
+            rows={history.rows}
+            hasMore={history.hasMore}
+            loading={history.loading}
+            error={history.error}
+            loadMore={history.loadMore}
+            t={t}
+            locale={locale}
+          />
+        </section>
+      ),
     },
     {
       id: "coverage",
@@ -812,6 +834,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
   const [filters, setFilters] = useState<UsageFilters>({});
+  const history = useRequestHistory(apiBase, filters);
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
     const params = new URLSearchParams({ range, surface });
@@ -898,6 +921,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
+            history={history}
             range={range}
             locale={locale}
             t={t}

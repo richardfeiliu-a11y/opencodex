@@ -1868,6 +1868,10 @@ table.logs-table {
   gap: var(--space-0-5);
 }
 
+.usage-requests-more {
+  margin-top: var(--space-3);
+}
+
 .logs-model-cell {
   display: inline-flex;
   align-items: center;
