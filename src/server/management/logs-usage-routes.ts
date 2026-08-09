@@ -54,7 +54,7 @@ import {
   type PersistedUsageEntry,
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
-import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
+import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface, type UsageSummaryFilters } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -187,9 +187,49 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   if (url.pathname === "/api/usage" && req.method === "GET") {
     const range = parseRange(url.searchParams.get("range"));
     const surface = parseUsageSurface(url.searchParams.get("surface"));
+    // 新增:可选过滤条件解析与校验
+    const filters: UsageSummaryFilters = {};
+    const provider = url.searchParams.get("provider")?.trim();
+    if (provider) filters.provider = provider;
+    const model = url.searchParams.get("model")?.trim();
+    if (model) filters.model = model;
+    const statusRaw = url.searchParams.get("status");
+    if (statusRaw !== null) {
+      if (/^[1-5]xx$/.test(statusRaw)) {
+        filters.status = statusRaw as "2xx" | "3xx" | "4xx" | "5xx";
+      } else {
+        const status = Number(statusRaw);
+        if (!Number.isInteger(status) || status < 100 || status > 599) {
+          return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599 or a class like 2xx" } }, 400, req, config);
+        }
+        filters.status = status;
+      }
+    }
+    const fromRaw = url.searchParams.get("from");
+    if (fromRaw !== null) {
+      const from = Number(fromRaw);
+      if (!Number.isInteger(from) || from < 0) {
+        return jsonResponse({ error: { code: "invalid_from", message: "from must be a non-negative integer timestamp" } }, 400, req, config);
+      }
+      filters.from = from;
+    }
+    const toRaw = url.searchParams.get("to");
+    if (toRaw !== null) {
+      const to = Number(toRaw);
+      if (!Number.isInteger(to) || to < 0) {
+        return jsonResponse({ error: { code: "invalid_to", message: "to must be a non-negative integer timestamp" } }, 400, req, config);
+      }
+      filters.to = to;
+    }
+    if (filters.from !== undefined && filters.to !== undefined && filters.from > filters.to) {
+      return jsonResponse({ error: { code: "invalid_range", message: "from must not be after to" } }, 400, req, config);
+    }
+    const hasFilters = Object.keys(filters).length > 0;
+    const filtersKey = hasFilters ? JSON.stringify(filters) : "";
     const now = Date.now();
     try {
-      const cacheKey = `${range}:${surface}`;
+      // 缓存 key 并入过滤条件(不同过滤不串缓存)
+      const cacheKey = `${range}:${surface}\0${filtersKey}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
@@ -200,7 +240,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       const revisionReadAt = Date.now();
       const summary = {
-        ...summarizeUsage(snapshot.entries, range, now, surface),
+        ...summarizeUsage(snapshot.entries, range, now, surface, hasFilters ? filters : undefined),
         historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
         truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
         entriesTruncated: snapshot.entriesTruncated,

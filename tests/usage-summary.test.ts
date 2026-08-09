@@ -705,3 +705,100 @@ describe("summarizeUsage", () => {
   });
 
 });
+
+describe("summarizeUsage filters", () => {
+  const F = 1_800_000_000_000;
+  const entries = [
+    entry({ ts: F, requestId: "a", provider: "openai", model: "gpt-5.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F, requestId: "b", provider: "anthropic", model: "claude-x", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F, requestId: "c", provider: "openai", model: "gpt-5.5", status: 503, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F - 86_400_000, requestId: "d", provider: "openai", model: "gpt-4.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    entry({ ts: F - 2 * 86_400_000, requestId: "e", provider: "openai", model: "gpt-5.5", status: 200, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+  ];
+
+  test("filters by provider (top-level exact match)", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "openai" });
+    expect(s.summary.requests).toBe(4); // a, c, d, e
+    expect(s.filters?.provider).toBe("openai");
+  });
+
+  test("filters by model (top-level exact match)", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { model: "gpt-5.5" });
+    expect(s.summary.requests).toBe(3); // a, c, e
+  });
+
+  test("filters by status", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { status: 503 });
+    expect(s.summary.requests).toBe(1); // c
+  });
+
+  test("filters by status class (2xx matches 2xx, excludes 3xx/4xx)", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { status: "2xx" });
+    // a(200), b(200), d(200), e(200) 命中;c(503) 排除
+    expect(s.summary.requests).toBe(4);
+    expect(s.summary.totalTokens).toBe(60);
+  });
+
+  test("status class 5xx matches only 5xx", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { status: "5xx" });
+    expect(s.summary.requests).toBe(1); // c(503)
+  });
+
+  test("exact integer status still matches exactly (no regression)", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { status: 200 });
+    expect(s.summary.requests).toBe(4); // a, b, d, e
+    const s503 = summarizeUsage(entries, "all", F, "all", { status: 503 });
+    expect(s503.summary.requests).toBe(1);
+  });
+
+  test("filters by from/to timestamp", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { from: F - 1, to: F });
+    expect(s.summary.requests).toBe(3); // a, b, c (d, e older than from)
+  });
+
+  test("combines filters", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "openai", model: "gpt-5.5", status: 200 });
+    expect(s.summary.requests).toBe(2); // a, e
+  });
+
+  test("empty result when no match", () => {
+    const s = summarizeUsage(entries, "all", F, "all", { provider: "nobody" });
+    expect(s.summary.requests).toBe(0);
+    expect(s.summary.totalTokens).toBe(0);
+  });
+
+  test("no filters behaves exactly as before", () => {
+    const withFilters = summarizeUsage(entries, "all", F, "all", undefined);
+    const without = summarizeUsage(entries, "all", F, "all");
+    expect(withFilters.summary.requests).toBe(without.summary.requests);
+    expect(withFilters.summary.totalTokens).toBe(without.summary.totalTokens);
+  });
+
+  // from/to 与 range 的交互:显式 from/to 优先,忽略 range 窗口的 since 裁剪
+  test("range=7d with from/to uses from/to, not the 7d window", () => {
+    // 显式 from/to 收窄到 [F-1, F],排除 d、e
+    const s = summarizeUsage(entries, "7d", F, "all", { from: F - 1, to: F });
+    expect(s.summary.requests).toBe(3); // a, b, c —— 与 range=all 的 from/to 结果一致
+  });
+
+  test("range=7d with from/to wider than window keeps from/to (not double-clipped)", () => {
+    // from 早于 7d 窗口起点:若不忽略 since,e 会被窗口裁剪排除;忽略后只有 from 生效
+    const s = summarizeUsage(entries, "7d", F, "all", { from: F - 10 * 86_400_000 });
+    expect(s.summary.requests).toBe(5); // a-e 全在 from 之后
+  });
+
+  // 回归保护:filters 检查必须在 surface 分支之前,任何 surface 值下过滤都生效
+  test("surface=codex still applies provider filter", () => {
+    const surfEntries = [
+      entry({ ts: F, requestId: "codex-openai", provider: "openai", surface: undefined, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+      entry({ ts: F, requestId: "codex-anthropic", provider: "anthropic", surface: undefined, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+      entry({ ts: F, requestId: "claude-openai", provider: "openai", surface: "claude", usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }),
+    ];
+    const s = summarizeUsage(surfEntries, "all", F, "codex", { provider: "openai" });
+    // 只保留 surface 未定义(surface=codex 桶)且 provider=openai 的那条:
+    // claude 那条被 surface 排除,anthropic 那条被 provider 排除。
+    expect(s.summary.requests).toBe(1);
+    expect(s.summary.totalTokens).toBe(15);
+    expect(s.providers.map(p => p.provider)).toEqual(["openai"]);
+  });
+});

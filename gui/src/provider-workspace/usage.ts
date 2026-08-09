@@ -195,6 +195,15 @@ export function attentionReasonKey(reason: string): "reauth" | "missing" | "cust
 export function formatRequestCount(n: number | undefined, locale = "en"): string {
   if (n === undefined) return "\u2014";
   const loc = locale.toLowerCase().slice(0, 2);
+  const trimZ = (s: string) => s.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+  // 截断到 2 位(不四舍五入),避免 999.999 跨档进位成 1000k。
+  // 用整数域写法 Math.floor((value*100)/divisor)/100(先乘后除),
+  // 消除 Math.floor(scaled*100)/100 的双精度下界误差(10030 曾得 10.02k,见 Task 1 修复 24317c8e)。
+  const compact = (value: number, divisor: number, suffix: string): string => {
+    const truncated = Math.floor((value * 100) / divisor) / 100;
+    if (Number.isInteger(truncated)) return `${truncated}${suffix}`;
+    return `${trimZ(truncated.toFixed(2))}${suffix}`;
+  };
   if (loc === "de") {
     const trimDe = (s: string) => s.replace(/\.0+$/, "").replace(".", ",");
     if (n >= 1_000_000_000) return `${trimDe((n / 1_000_000_000).toFixed(2))} Mrd.`;
@@ -202,9 +211,9 @@ export function formatRequestCount(n: number | undefined, locale = "en"): string
     if (n >= 1_000) return `${trimDe((n / 1_000).toFixed(1))} Tsd.`;
     return String(n);
   }
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2).replace(/\.?0+$/, "")}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  if (n >= 1_000_000_000) return compact(n, 1_000_000_000, "B");
+  if (n >= 1_000_000) return compact(n, 1_000_000, "M");
+  if (n >= 1_000) return compact(n, 1_000, "k");
   return String(n);
 }
 

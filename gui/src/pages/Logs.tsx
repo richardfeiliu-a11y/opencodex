@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
+import { CompactNumber } from "../components/CompactNumber";
 import { hashLogConversationQuery, matchesLogConversationId } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
@@ -702,15 +703,16 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       return tokenTotal !== undefined
                         ? (
                             <span className="logs-stack-end">
-                              <span>{log.usageStatus === "estimated" ? "~" : ""}{formatTokens(tokenTotal, locale)}</span>
+                              {log.usageStatus === "estimated" && <span>~</span>}
+                              <CompactNumber value={tokenTotal} locale={locale} />
                               {(read !== undefined && read > 0) && (
                                 <span className="muted text-caption leading-tight">
-                                  c {formatTokens(read, locale)}
+                                  c <CompactNumber value={read} locale={locale} />
                                 </span>
                               )}
                               {(write !== undefined && write > 0) && (
                                 <span className="muted text-caption leading-tight">
-                                  w {formatTokens(write, locale)}
+                                  w <CompactNumber value={write} locale={locale} />
                                 </span>
                               )}
                               {(log.usageStatus === "estimated" && read === undefined && write === undefined) && (
@@ -1000,16 +1002,16 @@ function LogDetailDialog({
         <section className="log-detail-section" aria-labelledby="log-detail-usage">
           <h4 id="log-detail-usage" className="log-detail-section-title">{t("logs.detail.section.usage")}</h4>
           <div className="log-detail-grid">
-            <span className="muted">{t("logs.tokens.input")}</span><span className="mono">{detail.usage ? formatTokens(detail.usage.inputTokens, localeCode) : "\u2014"}</span>
-            <span className="muted">{t("logs.tokens.output")}</span><span className="mono">{detail.usage ? formatTokens(detail.usage.outputTokens, localeCode) : "\u2014"}</span>
-            <span className="muted">{t("logs.tokens.cacheRead")}</span><span className="mono">{tokenSplit.read !== undefined ? formatTokens(tokenSplit.read, localeCode) : "\u2014"}</span>
-            <span className="muted">{t("logs.tokens.cacheWrite")}</span><span className="mono">{tokenSplit.write !== undefined ? formatTokens(tokenSplit.write, localeCode) : "\u2014"}</span>
-            <span className="muted">{t("logs.tokens.reasoning")}</span><span className="mono">{detail.usage?.reasoningOutputTokens !== undefined ? formatTokens(detail.usage.reasoningOutputTokens, localeCode) : "\u2014"}</span>
-            <span className="muted">{t("logs.detail.totalTokens")}</span><span className="mono">{displayContextTokenTotal(detail) !== undefined ? formatTokens(displayContextTokenTotal(detail)!, localeCode) : "\u2014"}</span>
+            <span className="muted">{t("logs.tokens.input")}</span>{detail.usage ? <CompactNumber value={detail.usage.inputTokens} locale={localeCode} className="mono" /> : <span className="mono">{"\u2014"}</span>}
+            <span className="muted">{t("logs.tokens.output")}</span>{detail.usage ? <CompactNumber value={detail.usage.outputTokens} locale={localeCode} className="mono" /> : <span className="mono">{"\u2014"}</span>}
+            <span className="muted">{t("logs.tokens.cacheRead")}</span>{tokenSplit.read !== undefined ? <CompactNumber value={tokenSplit.read} locale={localeCode} className="mono" /> : <span className="mono">{"\u2014"}</span>}
+            <span className="muted">{t("logs.tokens.cacheWrite")}</span>{tokenSplit.write !== undefined ? <CompactNumber value={tokenSplit.write} locale={localeCode} className="mono" /> : <span className="mono">{"\u2014"}</span>}
+            <span className="muted">{t("logs.tokens.reasoning")}</span>{detail.usage?.reasoningOutputTokens !== undefined ? <CompactNumber value={detail.usage.reasoningOutputTokens} locale={localeCode} className="mono" /> : <span className="mono">{"\u2014"}</span>}
+            <span className="muted">{t("logs.detail.totalTokens")}</span>{displayContextTokenTotal(detail) !== undefined ? <CompactNumber value={displayContextTokenTotal(detail)!} locale={localeCode} className="mono" /> : <span className="mono">{"\u2014"}</span>}
             {detail.usage?.contextTotalTokens !== undefined && (
               <>
                 <span className="muted">{t("logs.tokens.contextTotal")}</span>
-                <span className="mono">{formatTokens(detail.usage.contextTotalTokens, localeCode)}</span>
+                <CompactNumber value={detail.usage.contextTotalTokens} locale={localeCode} className="mono" />
               </>
             )}
           </div>

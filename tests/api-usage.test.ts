@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
+import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { resetUsageReadCacheForTests, usageReadCacheStatsForTests } from "../src/usage/log";
 
@@ -58,7 +59,7 @@ function writeFixture(now: number): void {
       provider: "anthropic",
       model: "claude-x",
       surface: "claude",
-      status: 200,
+      status: 503,
       durationMs: 11,
       usageStatus: "unreported",
     }),
@@ -72,10 +73,12 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-api-usage-"));
   process.env.OPENCODEX_HOME = testDir;
   resetUsageReadCacheForTests();
+  closeRequestHistoryIndex();
   saveConfig(baseConfig());
 });
 
 afterEach(() => {
+  closeRequestHistoryIndex();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -246,6 +249,167 @@ describe("GET /api/usage", () => {
       expect(body.summary.measuredRequests).toBe(0);
       expect(body.summary.totalTokens).toBe(0);
       expect(body.summary.coverageRatio).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("accepts provider/model/status/from/to filters", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?range=all&provider=openai&model=gpt-5.5&status=200", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.filters).toEqual({ provider: "openai", model: "gpt-5.5", status: 200 });
+      // fixture 中 provider=openai && model=gpt-5.5 && status=200 的只有 ocx-old 和 ocx-recent 两条
+      expect(body.summary.requests).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("accepts status class 2xx and counts only 2xx entries", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?range=all&status=2xx", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.filters).toEqual({ status: "2xx" });
+      // fixture:status=200 的只有 ocx-old 和 ocx-recent 两条(ocx-missing 为 503)
+      expect(body.summary.requests).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects status class 6xx", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?status=6xx", server.url));
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error?: { code?: string } };
+      expect(body.error?.code).toBe("invalid_status");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects invalid status", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?status=abc", server.url));
+      expect(res.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects status out of 100-599 range", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?status=99", server.url));
+      expect(res.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects from > to", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?from=2000&to=1000", server.url));
+      expect(res.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("cache key isolates different filters", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const a = await (await fetch(new URL("/api/usage?range=all&provider=openai", server.url))).json();
+      const b = await (await fetch(new URL("/api/usage?range=all&provider=anthropic", server.url))).json();
+      // 若缓存 key 未隔离,第二次请求会错误复用第一次结果
+      expect(a.summary.requests).toBe(2); // openai: ocx-old, ocx-recent
+      expect(b.summary.requests).toBe(1); // anthropic: ocx-missing(status 改 503 后仍 1 条)
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("filter consistency across /api/usage and /api/request-history", () => {
+  test("same provider filter yields same request count on both endpoints", async () => {
+    const now = Date.now();
+    writeFixture(now);
+    const server = startServer(0);
+    try {
+      const usageRes = await fetch(new URL("/api/usage?range=all&provider=openai", server.url));
+      const usageBody = await usageRes.json();
+
+      // 翻完 request-history 所有页,累计行数
+      let total = 0;
+      let cursor: string | undefined;
+      do {
+        const url = "/api/request-history?provider=openai&limit=100" + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+        const rh = await (await fetch(new URL(url, server.url))).json();
+        total += rh.entries.length;
+        cursor = rh.nextCursor;
+      } while (cursor);
+
+      expect(usageBody.summary.requests).toBe(total);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("same status filter yields same request count on both endpoints", async () => {
+    const now = Date.now();
+    writeFixture(now);
+    const server = startServer(0);
+    try {
+      // fixture 的 ocx-missing 为 status=503,此断言落在非空集上
+      const usageRes = await fetch(new URL("/api/usage?range=all&status=503", server.url));
+      const usageBody = await usageRes.json();
+      let total = 0;
+      let cursor: string | undefined;
+      do {
+        const url = "/api/request-history?status=503&limit=100" + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+        const rh = await (await fetch(new URL(url, server.url))).json();
+        total += rh.entries.length;
+        cursor = rh.nextCursor;
+      } while (cursor);
+      expect(usageBody.summary.requests).toBe(1); // ocx-missing
+      expect(total).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // range 与 from/to 组合:锁定"from/to 优先,不双重裁剪"策略
+  test("range=7d plus from/to stays consistent across both endpoints", async () => {
+    const now = Date.now();
+    writeFixture(now);
+    const server = startServer(0);
+    try {
+      const from = now - 2 * 86_400_000; // 覆盖 ocx-recent(1d 前)与 ocx-missing(1d 前),排除 ocx-old(10d 前)
+      const usageRes = await fetch(new URL(`/api/usage?range=7d&from=${from}`, server.url));
+      const usageBody = await usageRes.json();
+      let total = 0;
+      let cursor: string | undefined;
+      do {
+        const url = `/api/request-history?from=${from}&limit=100` + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+        const rh = await (await fetch(new URL(url, server.url))).json();
+        total += rh.entries.length;
+        cursor = rh.nextCursor;
+      } while (cursor);
+      // 若 range 的 since 与 from 双重裁剪,/api/usage 会额外排除窗口外记录,
+      // 与 request-history(只认 from)不一致——此断言锁定两者一致。
+      expect(usageBody.summary.requests).toBe(2); // ocx-recent + ocx-missing
+      expect(total).toBe(2);
     } finally {
       await server.stop(true);
     }

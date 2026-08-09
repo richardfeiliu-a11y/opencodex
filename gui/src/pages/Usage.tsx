@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
+import { CompactNumber } from "../components/CompactNumber";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
@@ -9,9 +10,15 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
-
-type Range = "all" | "30d" | "7d";
-type UsageSurface = "all" | "codex" | "claude" | "grok";
+import { RequestHistoryTable } from "../components/RequestHistoryTable";
+import { TokenTrend } from "../components/TokenTrend";
+import {
+  useRequestHistory,
+  type Range,
+  type UsageFilters,
+  type UsageSurface,
+} from "../hooks/useRequestHistory";
+import { dateInputToLocalEnd, dateInputToLocalStart, tsToDateInput } from "../usage-date-utils";
 
 interface UsageSummaryTotals {
   requests: number;
@@ -200,19 +207,33 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
   return { weeks, months, buckets };
 }
 
-function UsageFilters({
+export function UsageFilters({
   surface,
   range,
+  filters,
+  providers,
   onSurface,
   onRange,
+  onFilters,
   t,
 }: {
   surface: UsageSurface;
   range: Range;
+  filters: UsageFilters;
+  providers: string[];
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
+  onFilters: (filters: UsageFilters) => void;
   t: TFn;
 }) {
+  const setFilter = (patch: Partial<UsageFilters>) => onFilters({ ...filters, ...patch });
+  const providerSuggestions = Array.from(new Set(["openai", "claude", "grok", ...providers]));
+  const statusChoices: { label: string; value?: string }[] = [
+    { label: t("usage.filter.statusAll"), value: undefined },
+    { label: "2xx", value: "2xx" },
+    { label: "4xx", value: "4xx" },
+    { label: "5xx", value: "5xx" },
+  ];
   return (
     <div className="usage-filters">
       <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
@@ -260,6 +281,53 @@ function UsageFilters({
           );
         })}
       </div>
+      <div className="usage-filter-row">
+        <input
+          type="text"
+          list="usage-providers"
+          className="usage-filter-select"
+          aria-label={t("usage.filter.provider")}
+          placeholder={t("usage.filter.providerAll")}
+          value={filters.provider ?? ""}
+          onChange={e => setFilter({ provider: e.target.value || undefined })}
+        />
+        <datalist id="usage-providers">
+          {providerSuggestions.map(provider => (
+            <option key={provider} value={provider} />
+          ))}
+        </datalist>
+        <input
+          className="usage-filter-input"
+          aria-label={t("usage.filter.model")}
+          placeholder={t("usage.filter.model")}
+          value={filters.model ?? ""}
+          onChange={e => setFilter({ model: e.target.value || undefined })}
+        />
+        <select
+          className="usage-filter-select"
+          aria-label={t("usage.filter.status")}
+          value={filters.status ?? ""}
+          onChange={e => setFilter({ status: e.target.value === "" ? undefined : (e.target.value as UsageFilters["status"]) })}
+        >
+          {statusChoices.map(choice => (
+            <option key={choice.label} value={choice.value ?? ""}>{choice.label}</option>
+          ))}
+        </select>
+        <input
+          className="usage-filter-date"
+          type="date"
+          aria-label={t("usage.filter.from")}
+          value={filters.from !== undefined ? tsToDateInput(filters.from) : ""}
+          onChange={e => setFilter({ from: e.target.value ? dateInputToLocalStart(e.target.value) : undefined })}
+        />
+        <input
+          className="usage-filter-date"
+          type="date"
+          aria-label={t("usage.filter.to")}
+          value={filters.to !== undefined ? tsToDateInput(filters.to) : ""}
+          onChange={e => setFilter({ to: e.target.value ? dateInputToLocalEnd(e.target.value) : undefined })}
+        />
+      </div>
     </div>
   );
 }
@@ -280,13 +348,13 @@ function UsageSummaryCards({
     <div className="usage-cards usage-cards-3x2" role="group" aria-label={t("usage.title")}>
       <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{summary.requests}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
-      <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(summary.totalTokens, locale)}</div></div>
+      <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><CompactNumber value={summary.totalTokens} locale={locale} className="stat-value" /></div>
       <div className="stat" title={t("usage.card.cachedTokensHint")}>
         <div className="muted">{t("usage.card.cachedTokens")}</div>
-        <div className="stat-value">{formatTokens(summary.cacheReadInputTokens ?? summary.cachedInputTokens, locale)}</div>
+        <CompactNumber value={summary.cacheReadInputTokens ?? summary.cachedInputTokens} locale={locale} className="stat-value" />
         {(summary.cacheCreationInputTokens ?? 0) > 0 && (
           <div className="muted text-caption">
-            {t("usage.card.cacheWriteTokens")}: {formatTokens(summary.cacheCreationInputTokens ?? 0, locale)}
+            {t("usage.card.cacheWriteTokens")}: <CompactNumber value={summary.cacheCreationInputTokens ?? 0} locale={locale} />
           </div>
         )}
       </div>
@@ -351,12 +419,12 @@ function WeekDayBars({ weekBars, locale, t }: { weekBars: UsageDay[]; locale: Lo
                   <div key={`${model.provider}/${model.model}`} className="daybar-tip-row">
                     <span className="daybar-tip-swatch" style={{ background: modelColor(model.model, model.provider) }} />
                     <span className="daybar-tip-name">{modelLabel(model.model)}</span>
-                    <span className="daybar-tip-val">{formatTokens(model.totalTokens, locale)}</span>
+                    <CompactNumber value={model.totalTokens} locale={locale} className="daybar-tip-val" />
                   </div>
                 ))}
               </div>
             )}
-            <span className="daybar-count">{formatTokens(day.totalTokens, locale)}</span>
+            <CompactNumber value={day.totalTokens} locale={locale} className="daybar-count" />
             <span className="daybar-label muted">{label}</span>
           </div>
         );
@@ -515,7 +583,7 @@ function UsageModelsTable({
               <td className="muted">{model.provider}</td>
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
-              <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+              <td className="num"><CompactNumber value={model.totalTokens} locale={locale} className="mono" /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -575,7 +643,7 @@ function UsageProvidersTable({
               <td className="mono">{provider.provider}</td>
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
-              <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
+              <td className="num"><CompactNumber value={provider.totalTokens} locale={locale} className="mono" /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -653,6 +721,7 @@ function UsageWorkspaceBody({
   modelQuery,
   onModelQuery,
   sortedProviders,
+  history,
   range,
   locale,
   t,
@@ -665,6 +734,7 @@ function UsageWorkspaceBody({
   modelQuery: string;
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
+  history: ReturnType<typeof useRequestHistory>;
   range: Range;
   locale: Locale;
   t: TFn;
@@ -678,6 +748,7 @@ function UsageWorkspaceBody({
       body: data ? (
         <>
           <UsageSummaryCards summary={data.summary} activeDays={activeDays} locale={locale} t={t} />
+          <TokenTrend days={data.days} locale={locale} t={t} />
           <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
         </>
       ) : null,
@@ -697,6 +768,26 @@ function UsageWorkspaceBody({
       body: data
         ? <UsageProvidersTable providers={sortedProviders} locale={locale} t={t} workspace />
         : null,
+    },
+    {
+      id: "requests",
+      label: t("usage.section.requests"),
+      meta: history.hasMore ? `${history.rows.length}+` : `${history.rows.length}`,
+      body: (
+        <section aria-labelledby={sectionAnchorId("usage", "requests")}>
+          <h3 id={sectionAnchorId("usage", "requests")} className="panel-title">{t("usage.section.requests")}</h3>
+          <RequestHistoryTable
+            rows={history.rows}
+            hasMore={history.hasMore}
+            loading={history.loading}
+            error={history.error}
+            loadMore={history.loadMore}
+            onRetry={history.retryFirstPage}
+            t={t}
+            locale={locale}
+          />
+        </section>
+      ),
     },
     {
       id: "coverage",
@@ -733,17 +824,17 @@ function UsageWorkspaceBody({
 /** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
 const usageMemoryCache = new Map<string, UsageResponse>();
 
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
-  return `ocx.usage.v1:${apiBase}:${range}:${surface}`;
+function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, filters: UsageFilters): string {
+  return `ocx.usage.v1:${apiBase}:${range}:${surface}:${JSON.stringify(filters)}`;
 }
 
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageResponse | null {
-  const key = usageCacheKey(apiBase, range, surface);
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, filters: UsageFilters): UsageResponse | null {
+  const key = usageCacheKey(apiBase, range, surface, filters);
   return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
 }
 
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageResponse) {
-  const key = usageCacheKey(apiBase, range, surface);
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, filters: UsageFilters, value: UsageResponse) {
+  const key = usageCacheKey(apiBase, range, surface, filters);
   usageMemoryCache.set(key, value);
   writeSessionListCache(key, value);
 }
@@ -753,22 +844,31 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
+  const [filters, setFilters] = useState<UsageFilters>({});
+  // 明细与 Summary 共享 range/surface 语义:切换即清空旧明细并重拉第一页。
+  const history = useRequestHistory(apiBase, filters, range, surface);
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
-    const response = await fetch(`${apiBase}/api/usage?range=${range}&surface=${surface}`, { signal });
+    const params = new URLSearchParams({ range, surface });
+    if (filters.provider) params.set("provider", filters.provider);
+    if (filters.model) params.set("model", filters.model);
+    if (filters.status !== undefined) params.set("status", String(filters.status));
+    if (filters.from !== undefined) params.set("from", String(filters.from));
+    if (filters.to !== undefined) params.set("to", String(filters.to));
+    const response = await fetch(`${apiBase}/api/usage?${params}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
-    writeHeldUsage(apiBase, range, surface, next);
+    writeHeldUsage(apiBase, range, surface, filters, next);
     return next;
-  }, [apiBase, range, surface]);
+  }, [apiBase, range, surface, filters]);
 
-  const resourceKey = usageCacheKey(apiBase, range, surface);
-  const cached = readHeldUsage(apiBase, range, surface);
-  // Range and surface identify different reports, so the key changes with both. That prevents
-  // a force-loading dependency revalidation from ever showing a previous report as this one.
+  const resourceKey = usageCacheKey(apiBase, range, surface, filters);
+  const cached = readHeldUsage(apiBase, range, surface, filters);
+  // Range, surface and filters identify different reports, so the key changes with all of them.
+  // That prevents a force-loading dependency revalidation from ever showing a previous report as this one.
   const resource = useDataSurface<UsageResponse>(
     resourceKey,
-    [apiBase, range, surface],
+    [apiBase, range, surface, JSON.stringify(filters)],
     loadUsage,
     { isEmpty: () => false, initialData: cached ?? undefined },
   );
@@ -799,7 +899,16 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head usage-head">
         <h2 id="usage-page-title">{t("usage.title")}</h2>
-        <UsageFilters surface={surface} range={range} onSurface={setSurface} onRange={setRange} t={t} />
+        <UsageFilters
+          surface={surface}
+          range={range}
+          filters={filters}
+          providers={(data?.providers ?? []).map(p => p.provider)}
+          onSurface={setSurface}
+          onRange={setRange}
+          onFilters={setFilters}
+          t={t}
+        />
       </div>
       <p className="page-sub">{t("usage.subtitle")}</p>
 
@@ -825,6 +934,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
+            history={history}
             range={range}
             locale={locale}
             t={t}

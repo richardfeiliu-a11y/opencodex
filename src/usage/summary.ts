@@ -6,6 +6,16 @@ import { estimateComboCost, estimateRequestCost, effectiveServiceTier } from "./
 
 export type UsageRange = "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude" | "grok";
+export type StatusClass = "2xx" | "3xx" | "4xx" | "5xx";
+
+/** 可选过滤条件,语义与 request-history indexer 一致:顶层精确匹配,不含 attempts。 */
+export interface UsageSummaryFilters {
+  provider?: string;
+  model?: string;
+  status?: number | StatusClass;
+  from?: number;
+  to?: number;
+}
 
 export interface UsageSummaryTotals {
   requests: number;
@@ -84,6 +94,8 @@ export interface UsageSummary {
   surface: UsageSurface;
   since: number | null;
   generatedAt: number;
+  /** 回显本次请求使用的过滤条件;无过滤时为 undefined。 */
+  filters?: UsageSummaryFilters;
   summary: UsageSummaryTotals;
   days: UsageDay[];
   models: UsageModel[];
@@ -552,10 +564,28 @@ export function summarizeUsage(
   range: UsageRange,
   now: number,
   surface: UsageSurface = "all",
+  filters?: UsageSummaryFilters,
 ): UsageSummary {
-  const { since } = rangeWindow(range, now);
+  // P1 修订:from/to 优先于 range 窗口。传了 from/to 时,since 不再参与裁剪,
+  // 避免与 request-history(无 range,只认 from/to)产生双重裁剪导致计数不一致。
+  const hasExplicitTime = filters?.from !== undefined || filters?.to !== undefined;
+  const { since } = hasExplicitTime ? { since: null } : rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
+    // 可选过滤条件(顶层精确匹配,与 indexer 一致)必须在 surface 分支之前:
+    // surface 分支会直接 return,放后面会导致 surface ≠ "all" 时过滤被静默忽略。
+    if (filters?.provider !== undefined && entry.provider !== filters.provider) return false;
+    if (filters?.model !== undefined && entry.model !== filters.model) return false;
+    if (filters?.status !== undefined) {
+      if (typeof filters.status === "number") {
+        if (entry.status !== filters.status) return false;
+      } else {
+        const tier = Number(filters.status[0]); // "2xx" -> 2
+        if (Math.floor(entry.status / 100) !== tier) return false;
+      }
+    }
+    if (filters?.from !== undefined && entry.timestamp < filters.from) return false;
+    if (filters?.to !== undefined && entry.timestamp > filters.to) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
     // Codex = the historical unlabelled bucket. Before the grok tag existed every
@@ -577,6 +607,7 @@ export function summarizeUsage(
     surface,
     since,
     generatedAt: now,
+    ...(filters ? { filters } : {}),
     summary: totals,
     days: buildDayGrid(range, since, now, filteredEntries),
     models: buildModels(filteredEntries, totals.totalTokens),

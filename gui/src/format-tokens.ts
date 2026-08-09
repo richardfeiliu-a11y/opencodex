@@ -9,9 +9,21 @@ const CJK_UNITS: Record<string, Array<{ v: number; s: string }>> = {
   zh: [{ v: 1e16, s: "京" }, { v: 1e12, s: "兆" }, { v: 1e8, s: "亿" }, { v: 1e4, s: "万" }],
 };
 
-/** Trim a trailing ".0"/".00" so 12.00만 renders as 12만. */
-function trim(s: string): string {
+/** Trim trailing zeros so 12.34K stays, but 12.00K -> 12K. */
+function trimTrailingZeros(s: string): string {
   return s.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+/** §12.1: max 2 decimals, trailing zeros trimmed, integer values show 0 decimals.
+ *  MUST floor-truncate to 2 decimals (not round): rounding makes 999.999 -> 1000,
+ *  crossing into the next suffix tier (999,999 would show "1000K" instead of "999.99K"). */
+function compactWithPrecision(value: number, divisor: number, suffix: string): string {
+  // 整数域截断(先乘后除):value * 100 在 token 量级(≤1e15)内是精确整数运算,
+  // 避免 (n/divisor)*100 的双精度下界误差(如 10030/1000*100 = 1002.9999…,floor 得 1002)。
+  const truncated = Math.floor((value * 100) / divisor) / 100;
+  if (Number.isInteger(truncated)) return `${truncated}${suffix}`;
+  const fixed = truncated.toFixed(2);
+  return `${trimTrailingZeros(fixed)}${suffix}`;
 }
 
 export function formatTokens(n: number, locale: string): string {
@@ -19,14 +31,22 @@ export function formatTokens(n: number, locale: string): string {
   if (units) {
     for (const u of units) {
       if (n >= u.v) {
-        return `${trim((n / u.v).toFixed(1))}${u.s}`;
+        return compactWithPrecision(n, u.v, u.s);
       }
     }
     return String(n);
   }
   if (n < 10_000) return String(n);
-  if (n < 1_000_000) return `${trim((n / 1000).toFixed(1))}K`;
-  if (n < 1_000_000_000) return `${trim((n / 1_000_000).toFixed(1))}M`;
-  if (n < 1_000_000_000_000) return `${trim((n / 1_000_000_000).toFixed(1))}B`;
-  return `${trim((n / 1_000_000_000_000).toFixed(1))}T`;
+  if (n < 1_000_000) return compactWithPrecision(n, 1000, "K");
+  if (n < 1_000_000_000) return compactWithPrecision(n, 1_000_000, "M");
+  if (n < 1_000_000_000_000) return compactWithPrecision(n, 1_000_000_000, "B");
+  return compactWithPrecision(n, 1_000_000_000_000, "T");
+}
+
+/** Exact integer with thousands separators, for tooltips/aria-labels. */
+/** Cached en-US integer formatter — exact values appear in every CompactNumber tooltip. */
+const exactNumberFormatter = new Intl.NumberFormat("en-US");
+
+export function formatTokensExact(n: number): string {
+  return exactNumberFormatter.format(n);
 }
