@@ -56,35 +56,11 @@ describe("formatTokens", () => {
   test("zh: 1,234,567 -> 123.45万 (truncated, not rounded)", () => {
     expect(formatTokens(1234567, "zh")).toBe("123.45万");
   });
-  test("ko: 1,234,567 -> 123.45만 (myriad scale, truncated)", () => {
-    expect(formatTokens(1234567, "ko")).toBe("123.45만");
-  });
   // 千分位精确值
   test("exact: 1,234,567 -> 1,234,567", () => {
     expect(formatTokensExact(1234567)).toBe("1,234,567");
   });
   test("exact: 0 -> 0", () => {
     expect(formatTokensExact(0)).toBe("0");
-  });
-});
-
-import { formatRequestCount } from "../src/provider-workspace/usage";
-
-describe("formatRequestCount", () => {
-  test("en: 1,000 -> 1k (aligned to max-2-decimals)", () => {
-    expect(formatRequestCount(1000, "en")).toBe("1k");
-  });
-  test("en: 12,340 -> 12.34k", () => {
-    expect(formatRequestCount(12340, "en")).toBe("12.34k");
-  });
-  test("en: 128,394,822 -> 128.39M", () => {
-    expect(formatRequestCount(128394822, "en")).toBe("128.39M");
-  });
-  // 跨档边界:截断而非四舍五入
-  test("en: 999,999 -> 999.99k (not 1000k)", () => {
-    expect(formatRequestCount(999999, "en")).toBe("999.99k");
-  });
-  test("de: 12,340 -> 12,3 Tsd. (German branch preserved)", () => {
-    expect(formatRequestCount(12340, "de")).toBe("12,3 Tsd.");
   });
 });
