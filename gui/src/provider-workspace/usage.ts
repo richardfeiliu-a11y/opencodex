@@ -205,10 +205,14 @@ export function formatRequestCount(n: number | undefined, locale = "en"): string
     return `${trimZ(truncated.toFixed(2))}${suffix}`;
   };
   if (loc === "de") {
-    const trimDe = (s: string) => s.replace(/\.0+$/, "").replace(".", ",");
-    if (n >= 1_000_000_000) return `${trimDe((n / 1_000_000_000).toFixed(2))} Mrd.`;
-    if (n >= 1_000_000) return `${trimDe((n / 1_000_000).toFixed(1))} Mio.`;
-    if (n >= 1_000) return `${trimDe((n / 1_000).toFixed(1))} Tsd.`;
+    const compactDe = (value: number, divisor: number, suffix: string): string => {
+      const truncated = Math.floor((value * 100) / divisor) / 100;
+      const s = Number.isInteger(truncated) ? `${truncated}` : trimZ(truncated.toFixed(2));
+      return `${s.replace(".", ",")} ${suffix}`;
+    };
+    if (n >= 1_000_000_000) return compactDe(n, 1_000_000_000, "Mrd.");
+    if (n >= 1_000_000) return compactDe(n, 1_000_000, "Mio.");
+    if (n >= 1_000) return compactDe(n, 1_000, "Tsd.");
     return String(n);
   }
   if (n >= 1_000_000_000) return compact(n, 1_000_000_000, "B");

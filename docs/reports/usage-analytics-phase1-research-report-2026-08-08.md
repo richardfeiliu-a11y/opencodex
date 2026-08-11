@@ -20,9 +20,9 @@ related: ["usage-analytics-phase1-research-prompt-2026-08-08.md", "usage-analyti
 | 项目 | 值 |
 |---|---|
 | 执行时间 | 2026-08-08(本地时区 Europe/Berlin) |
-| 用户主目录 | `/Users/fei` |
+| 用户主目录 | `/Users/me` |
 | 操作系统 | macOS |
-| 当前工作区 | `/Users/fei/projects/Opencodex`(本报告与该研究提示文档所在目录) |
+| 当前工作区 | `/Users/me/projects/Opencodex`(本报告与该研究提示文档所在目录) |
 
 ### 0.2 研究提示假设路径 vs 本机实际状态
 
@@ -32,7 +32,7 @@ related: ["usage-analytics-phase1-research-prompt-2026-08-08.md", "usage-analyti
 |---|---|
 | `~/Projects/opencodex-dev` | 不存在(`~/Projects` 下无此目录) |
 | `~/Projects/cc-switch` | 不存在 |
-| 当前工作区 `/Users/fei/projects/Opencodex` | 仅有研究提示文档 + 本报告,非 git 仓库 |
+| 当前工作区 `/Users/me/projects/Opencodex` | 仅有研究提示文档 + 本报告,非 git 仓库 |
 
 > 结论:无法按提示直接在两个源码仓库中作业。研究改以**本机真实运行数据 + 已安装 npm 包中的完整后端源码 + GUI 编译产物逆向**进行,证据链在 §0.3~§0.5 完整列出。
 
@@ -42,37 +42,37 @@ related: ["usage-analytics-phase1-research-prompt-2026-08-08.md", "usage-analyti
 
 | 绝对路径 | 内容 |
 |---|---|
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/` | 完整后端源码(Bun 原生 TS,13 个一级子目录) |
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/usage/` | usage 核心:log / summary / totals / cost / debug / expected-prices |
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/server/management/` | management API 各路由(23 个文件) |
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/routing/history/` | request-history 索引:indexer / cursor / schema |
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/AGENTS.md` | 源码运行时与仓库规则(本报告 §2 依据) |
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/package.json` | 版本 2.11.0、脚本、依赖、上游仓库地址 |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/` | 完整后端源码(Bun 原生 TS,13 个一级子目录) |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/usage/` | usage 核心:log / summary / totals / cost / debug / expected-prices |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/server/management/` | management API 各路由(23 个文件) |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/routing/history/` | request-history 索引:indexer / cursor / schema |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/src/AGENTS.md` | 源码运行时与仓库规则(本报告 §2 依据) |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/package.json` | 版本 2.11.0、脚本、依赖、上游仓库地址 |
 
 #### B. OpenCodex GUI 编译产物(无源码,逆向依据)
 
 | 绝对路径 | 内容 |
 |---|---|
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/gui/dist/index.html` | SPA 入口 |
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/gui/dist/assets/index-BynIEIV-.js` | React 生产构建(1.63MB,minified);含格式化函数 `br()` / `Df()` / `Sr()`、全部 i18n 文案、API 调用串 |
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/gui/dist/assets/index-Bk-PN-70.css` | 样式(169KB);含组件类名(usage-cards / usage-filters / usage-workspace-* / logs-table / heatmap-cell-*) |
-| `/Users/fei/.hermes/node/lib/node_modules/@bitkyc08/opencodex/gui/dist/provider-icons/` | Provider 图标(38 个 SVG) |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/gui/dist/index.html` | SPA 入口 |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/gui/dist/assets/index-BynIEIV-.js` | React 生产构建(1.63MB,minified);含格式化函数 `br()` / `Df()` / `Sr()`、全部 i18n 文案、API 调用串 |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/gui/dist/assets/index-Bk-PN-70.css` | 样式(169KB);含组件类名(usage-cards / usage-filters / usage-workspace-* / logs-table / heatmap-cell-*) |
+| `/Users/me/.hermes/node/lib/node_modules/@bitkyc08/opencodex/gui/dist/provider-icons/` | Provider 图标(38 个 SVG) |
 
 #### C. OpenCodex 运行数据(真实使用证据)
 
 | 绝对路径 | 规模 | 内容 |
 |---|---|---|
-| `/Users/fei/.opencodex/usage.jsonl` | 5.6MB,4908 条(2026-08-07 05:32 ~ 2026-08-08 22:27) | 规范 usage 记录;字段覆盖统计见 §3.3 |
-| `/Users/fei/.opencodex/routing-history.sqlite` | 7.6MB(含 WAL) | request-history 派生索引,与 indexer 代码对应 |
-| `/Users/fei/.opencodex/config.json` | 36KB | 运行配置(managementUsageMaxReadBytes 等引用处) |
+| `/Users/me/.opencodex/usage.jsonl` | 5.6MB,4908 条(2026-08-07 05:32 ~ 2026-08-08 22:27) | 规范 usage 记录;字段覆盖统计见 §3.3 |
+| `/Users/me/.opencodex/routing-history.sqlite` | 7.6MB(含 WAL) | request-history 派生索引,与 indexer 代码对应 |
+| `/Users/me/.opencodex/config.json` | 36KB | 运行配置(managementUsageMaxReadBytes 等引用处) |
 
 #### D. CC Switch 运行数据(闭源应用,仅有数据)
 
 | 绝对路径 | 规模 | 内容 |
 |---|---|---|
-| `/Users/fei/.cc-switch/cc-switch.db` | 30MB,46292 条 `proxy_request_logs` + 93 行 `usage_daily_rollups` | 真实请求/日汇总数据;字段含 cost(字符串存储) |
-| `/Users/fei/.cc-switch/settings.json` | 1.4KB | `usageDashboardRefreshIntervalMs: 5000`、`language: zh` 等 |
-| `/Users/fei/.cc-switch/model-pricing.json` | 263B | 定价(极小,与 OpenCodex expected-prices 对应) |
+| `/Users/me/.cc-switch/cc-switch.db` | 30MB,46292 条 `proxy_request_logs` + 93 行 `usage_daily_rollups` | 真实请求/日汇总数据;字段含 cost(字符串存储) |
+| `/Users/me/.cc-switch/settings.json` | 1.4KB | `usageDashboardRefreshIntervalMs: 5000`、`language: zh` 等 |
+| `/Users/me/.cc-switch/model-pricing.json` | 263B | 定价(极小,与 OpenCodex expected-prices 对应) |
 
 #### E. 上游仓库(未克隆,后续 Phase 2 需访问)
 

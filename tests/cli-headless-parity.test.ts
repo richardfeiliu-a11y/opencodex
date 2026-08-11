@@ -99,6 +99,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/startup", "ocx system"],
       ["/api/stop", "ocx stop"],
       ["/api/storage", "ocx observe"],
+      ["/api/request-history", "(none — GUI analytics surface; history via ocx observe/logs)"],
       ["/api/subagent", "ocx agent"],
       ["/api/sync", "ocx system sync"],
       ["/api/system", "ocx observe/system"],
