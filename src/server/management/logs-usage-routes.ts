@@ -55,7 +55,7 @@ import {
   type PersistedUsageEntry,
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
-import { USAGE_RANGES, USAGE_SURFACES, parseRange, parseUsageSurface, projectUsageSummary, rangeWindow, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
+import { USAGE_RANGES, USAGE_SURFACES, parseRange, parseUsageSurface, projectUsageSummary, rangeWindow, summarizeUsage, type UsageRange, type UsageSummary, type UsageSummaryFilters, type UsageSurface } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -201,13 +201,52 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     // the cache or the warm loop below: the key is `range:surface`, so a
     // filtered entry stored under it would be served to the next unfiltered
     // caller, dashboard included.
-    const filter = {
-      provider: url.searchParams.get("provider"),
-      model: url.searchParams.get("model"),
-    };
+    const filters: UsageSummaryFilters = {};
+    const providerRaw = url.searchParams.get("provider");
+    const modelRaw = url.searchParams.get("model");
+    if (providerRaw?.trim()) filters.provider = providerRaw.trim();
+    if (modelRaw?.trim()) filters.model = modelRaw.trim();
+    const statusRaw = url.searchParams.get("status");
+    if (statusRaw !== null) {
+      if (/^[1-5]xx$/.test(statusRaw)) {
+        filters.status = statusRaw as "2xx" | "3xx" | "4xx" | "5xx";
+      } else {
+        const status = Number(statusRaw);
+        if (!Number.isInteger(status) || status < 100 || status > 599) {
+          return jsonResponse({ error: { code: "invalid_status", message: "status must be an integer from 100 to 599 or a class like 2xx" } }, 400);
+        }
+        filters.status = status;
+      }
+    }
+    const fromRaw = url.searchParams.get("from");
+    if (fromRaw !== null) {
+      const from = Number(fromRaw);
+      if (!Number.isInteger(from) || from < 0) {
+        return jsonResponse({ error: { code: "invalid_from", message: "from must be a non-negative integer timestamp" } }, 400);
+      }
+      filters.from = from;
+    }
+    const mergedToRaw = url.searchParams.get("to");
+    if (mergedToRaw !== null) {
+      const toVal = Number(mergedToRaw);
+      if (!Number.isInteger(toVal) || toVal < 0) {
+        return jsonResponse({ error: { code: "invalid_to", message: "to must be a non-negative integer timestamp" } }, 400);
+      }
+      filters.to = toVal;
+    }
+    if (filters.from !== undefined && filters.to !== undefined && filters.from > filters.to) {
+      return jsonResponse({ error: { code: "invalid_range", message: "from must not be after to" } }, 400);
+    }
+    const filterRequested = filters.provider !== undefined || filters.model !== undefined
+      || filters.status !== undefined || filters.from !== undefined || filters.to !== undefined;
     const project = <T extends UsageSummary>(summary: T, entries?: PersistedUsageEntry[]) =>
-      projectUsageSummary(summary, filter, entries);
-    const filterRequested = Boolean(filter.provider ?? filter.model);
+      projectUsageSummary(summary, {
+        provider: filters.provider ?? null,
+        model: filters.model ?? null,
+        ...(filters.status !== undefined ? { status: filters.status } : {}),
+        ...(filters.from !== undefined ? { from: filters.from } : {}),
+        ...(filters.to !== undefined ? { to: filters.to } : {}),
+      }, entries);
     const now = Date.now();
     try {
       const cacheKey = `${range}:${surface}`;

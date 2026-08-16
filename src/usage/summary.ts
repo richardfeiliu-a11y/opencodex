@@ -16,6 +16,17 @@ export type UsageRange = typeof USAGE_RANGES[number];
 export const USAGE_SURFACES = ["all", "codex", "claude", "grok"] as const;
 export type UsageSurface = typeof USAGE_SURFACES[number];
 
+export type StatusClass = "2xx" | "3xx" | "4xx" | "5xx";
+
+/** Optional filters, consistent with the request-history indexer: top-level exact match, no attempt expansion. */
+export interface UsageSummaryFilters {
+  provider?: string;
+  model?: string;
+  status?: number | StatusClass;
+  from?: number;
+  to?: number;
+}
+
 export interface UsageSummaryTotals {
   requests: number;
   attemptCount: number;
@@ -119,6 +130,8 @@ export interface UsageSummary {
   surface: UsageSurface;
   since: number | null;
   generatedAt: number;
+  /** Present only when the caller supplied filters. */
+  filters?: UsageSummaryFilters;
   summary: UsageSummaryTotals;
   days: UsageDay[];
   models: UsageModel[];
@@ -136,6 +149,11 @@ export interface UsageSummary {
 export interface UsageFilterEcho {
   provider: string | null;
   model: string | null;
+  /** Status filter echo, present only when the caller filtered by status. */
+  status?: string | number | null;
+  /** Explicit time-window echoes, present only when the caller supplied them. */
+  from?: number | null;
+  to?: number | null;
   matched: boolean;
   /**
    * True when a retained row came from a combo attribution. Cost partitions
@@ -808,10 +826,29 @@ export function summarizeUsage(
   range: UsageRange,
   now: number,
   surface: UsageSurface = "all",
+  filters?: UsageSummaryFilters,
 ): UsageSummary {
-  const { since } = rangeWindow(range, now);
+  // Explicit from/to override the range window: since is skipped so we do not
+  // double-trim against request-history (which has no range, only from/to).
+  const hasExplicitTime = filters?.from !== undefined || filters?.to !== undefined;
+  const { since } = hasExplicitTime ? { since: null } : rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
+    // Optional filters (top-level exact match, matching the indexer) must run
+    // before the surface branches: those return directly, so later placement
+    // would silently skip filters when surface !== "all".
+    if (filters?.provider !== undefined && entry.provider !== filters.provider) return false;
+    if (filters?.model !== undefined && entry.model !== filters.model) return false;
+    if (filters?.status !== undefined) {
+      if (typeof filters.status === "number") {
+        if (entry.status !== filters.status) return false;
+      } else {
+        const tier = Number(filters.status[0]); // "2xx" -> 2
+        if (Math.floor(entry.status / 100) !== tier) return false;
+      }
+    }
+    if (filters?.from !== undefined && entry.timestamp < filters.from) return false;
+    if (filters?.to !== undefined && entry.timestamp > filters.to) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
     // Codex = the historical unlabelled bucket. Before the grok tag existed every
@@ -833,6 +870,7 @@ export function summarizeUsage(
     surface,
     since,
     generatedAt: now,
+    ...(filters ? { filters } : {}),
     summary: totals,
     days: buildDayGrid(range, since, now, filteredEntries),
     models: buildModels(filteredEntries, totals.totalTokens),
@@ -869,12 +907,30 @@ function normalizeFilterValue(input: string | null | undefined): string | null {
  */
 export function projectUsageSummary<T extends UsageSummary>(
   summary: T,
-  filter: { provider?: string | null; model?: string | null },
+  filter: {
+    provider?: string | null;
+    model?: string | null;
+    status?: number | "2xx" | "3xx" | "4xx" | "5xx";
+    from?: number;
+    to?: number;
+  },
   entries?: PersistedUsageEntry[],
 ): T & { filter?: UsageFilterEcho } {
   const provider = normalizeFilterValue(filter.provider);
   const model = normalizeFilterValue(filter.model);
-  if (provider === null && model === null) return summary;
+  const hasStatus = filter.status !== undefined;
+  const hasTime = filter.from !== undefined || filter.to !== undefined;
+  if (provider === null && model === null && !hasStatus && !hasTime) return summary;
+
+  const matchesStatus = (status: number | undefined): boolean => {
+    if (!hasStatus) return true;
+    if (typeof status !== "number") return false;
+    if (typeof filter.status === "number") return status === filter.status;
+    return Math.floor(status / 100) === Number((filter.status as string)[0]);
+  };
+  const matchesTime = (timestamp: number): boolean =>
+    (filter.from === undefined || timestamp >= filter.from)
+    && (filter.to === undefined || timestamp <= filter.to);
 
   // Re-summarise from the entries the summary was built from, rather than
   // projecting over its rows.
@@ -908,16 +964,26 @@ export function projectUsageSummary<T extends UsageSummary>(
   let comboOverlap = false;
   const filtered: PersistedUsageEntry[] = [];
   for (const entry of source) {
+    // Status/date are entry-level predicates on non-combo rows (single request,
+    // single status), and attempt-level predicates on combo rows so a retained
+    // combo keeps only the attempts whose own status/time matched.
     if (!entry.attempts?.length) {
-      if (matches(entry.provider, antigravityUsageModel(entry.provider, entry.model))) filtered.push(entry);
+      if (
+        matches(entry.provider, antigravityUsageModel(entry.provider, entry.model))
+        && matchesStatus(entry.status)
+        && matchesTime(entry.timestamp)
+      ) filtered.push(entry);
       continue;
     }
-    const attempts = entry.attempts.filter(a => matches(a.provider, antigravityUsageModel(a.provider, a.model)));
+    const attempts = entry.attempts.filter(a =>
+      matches(a.provider, antigravityUsageModel(a.provider, a.model))
+      && matchesStatus(a.status));
     if (attempts.length === 0) continue;
     // A combo is still counted once per participating model, so a filtered
     // request count can exceed the number of distinct requests. That is the
     // documented overlap, and it is why comboOverlap exists.
     if (entry.attempts.length > 1) comboOverlap = true;
+    if (!matchesTime(entry.timestamp)) continue;
     filtered.push({ ...entry, attempts });
   }
 
@@ -941,6 +1007,14 @@ export function projectUsageSummary<T extends UsageSummary>(
     // honestly re-derive, and unfiltered account totals sitting beside filtered
     // model totals would invite exactly the wrong reading.
     accounts: [],
-    filter: { provider, model, matched, comboOverlap },
+    filter: {
+      provider,
+      model,
+      ...(hasStatus ? { status: filter.status } : {}),
+      ...(filter.from !== undefined ? { from: filter.from } : {}),
+      ...(filter.to !== undefined ? { to: filter.to } : {}),
+      matched,
+      comboOverlap,
+    },
   };
 }

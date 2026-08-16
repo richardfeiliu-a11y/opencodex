@@ -16,8 +16,23 @@ function trim(s: string): string {
   return s.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
 }
 
+/** German compact form: comma decimals with Tsd./Mio./Mrd./Bio. suffixes. */
+function compactGerman(value: number, divisor: number, suffix: string): string {
+  const truncated = Math.floor((value * 100) / divisor) / 100;
+  if (Number.isInteger(truncated)) return `${truncated}${suffix}`;
+  return `${trim(truncated.toFixed(2)).replace(".", ",")}${suffix}`;
+}
+
 export function formatTokens(n: number, locale: string): string {
-  const units = CJK_UNITS[locale];
+  const loc = locale.toLowerCase().slice(0, 2);
+  if (loc === "de") {
+    if (n < 1_000) return String(n);
+    if (n < 1_000_000) return compactGerman(n, 1_000, "Tsd.");
+    if (n < 1_000_000_000) return compactGerman(n, 1_000_000, "Mio.");
+    if (n < 1_000_000_000_000) return compactGerman(n, 1_000_000_000, "Mrd.");
+    return compactGerman(n, 1_000_000_000_000, "Bio.");
+  }
+  const units = CJK_UNITS[loc];
   if (units) {
     for (const u of units) {
       if (n >= u.v) {

@@ -1071,4 +1071,76 @@ describe("GET /api/usage", () => {
       await server.stop(true);
     }
   });
+
+  test("filters by provider and keeps the filtered view out of the shared cache", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?provider=openai&range=all", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.summary.requests).toBe(2);
+      expect(body.models.every((m: { provider: string }) => m.provider === "openai")).toBe(true);
+      expect(body.filter).toMatchObject({ provider: "openai", model: null, matched: true });
+      // The unfiltered range:all summary must remain cacheable under its own key.
+      const unfiltered = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
+      expect(unfiltered.summary.requests).toBe(3);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("filters by status class 5xx", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?status=5xx&range=all", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // fixture has no 5xx yet, so expect zero rather than an error
+      expect(body.summary.requests).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("filters by exact status and model together", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?model=claude-x&status=200&range=all", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.summary.requests).toBe(1);
+      expect(body.models[0]?.model).toBe("claude-x");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects invalid from/to ordering with 400", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL(`/api/usage?from=${Date.now()}&to=1&range=all`, server.url));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.code).toBe("invalid_range");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("rejects malformed status class with 400", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?status=abc&range=all", server.url));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.code).toBe("invalid_status");
+    } finally {
+      await server.stop(true);
+    }
+  });
 });
