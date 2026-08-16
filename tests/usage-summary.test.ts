@@ -938,3 +938,54 @@ describe("summarizeUsage", () => {
   });
 
 });
+
+describe("summarizeUsage filters", () => {
+  const base = [
+    entry({ ts: FIXED_NOW - 8 * 86_400_000, provider: "openai", model: "gpt-5.5", status: 200, usageStatus: "reported", usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } }),
+    entry({ ts: FIXED_NOW - 8 * 86_400_000, provider: "anthropic", model: "claude-4", status: 404, usageStatus: "unreported" }),
+    entry({ ts: FIXED_NOW, provider: "openai", model: "gpt-5.5", status: 500, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }),
+  ] as PersistedUsageEntry[];
+
+  test("provider filter keeps only matching rows", () => {
+    const sum = summarizeUsage(base, "all", FIXED_NOW, "all", { provider: "openai" });
+    expect(sum.summary.requests).toBe(2);
+    expect(sum.models.every(m => m.provider === "openai")).toBe(true);
+    expect(sum.filters?.provider).toBe("openai");
+  });
+
+  test("model filter keeps only matching rows", () => {
+    const sum = summarizeUsage(base, "all", FIXED_NOW, "all", { model: "claude-4" });
+    expect(sum.summary.requests).toBe(1);
+    expect(sum.providers[0]?.provider).toBe("anthropic");
+  });
+
+  test("status class 5xx keeps only 500-599 rows", () => {
+    const sum = summarizeUsage(base, "all", FIXED_NOW, "all", { status: "5xx" });
+    expect(sum.summary.requests).toBe(1);
+    expect(sum.days[sum.days.length - 1]?.requests).toBe(1);
+  });
+
+  test("exact numeric status keeps only matching rows", () => {
+    const sum = summarizeUsage(base, "all", FIXED_NOW, "all", { status: 404 });
+    expect(sum.summary.requests).toBe(1);
+  });
+
+  test("from/to override range window so the count is not double-trimmed", () => {
+    const sum = summarizeUsage(base, "30d", FIXED_NOW, "all", { from: FIXED_NOW - 86_400_000, to: FIXED_NOW });
+    expect(sum.since).toBeNull();
+    expect(sum.summary.requests).toBe(1);
+    expect(sum.filters?.to).toBe(FIXED_NOW);
+  });
+
+  test("from/to keep the day grid scoped to the selected window", () => {
+    const sum = summarizeUsage(base, "all", FIXED_NOW, "all", { from: FIXED_NOW - 86_400_000, to: FIXED_NOW });
+    // Only today has activity in [FIXED_NOW-1d, FIXED_NOW]
+    expect(sum.days.every(d => d.requests === 0 || d.date === sum.days[sum.days.length - 1]?.date)).toBe(true);
+  });
+
+  test("no filters keeps range window behavior", () => {
+    const sum = summarizeUsage(base, "7d", FIXED_NOW, "all");
+    expect(sum.since).not.toBeNull();
+    expect(sum.filters).toBeUndefined();
+  });
+});
