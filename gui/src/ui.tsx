@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { IconCheck, IconAlert } from "./icons";
 import { IconChevron } from "./icons";
 import { computeSelectMenuStyle } from "./select-position";
+import { getActiveLocale } from "./i18n/shared";
 
 export function Switch({ on, mixed = false, onClick, disabled, label }: { on: boolean; mixed?: boolean; onClick: () => void; disabled?: boolean; label?: string }) {
   return (
