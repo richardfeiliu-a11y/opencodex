@@ -65,6 +65,171 @@ export function ToastNotice({
   );
 }
 
+/**
+ * 自定义日期选择器:外观与 Select 一致(液态玻璃风格)。
+ * 用三个下拉(年/月/日)代替原生 <input type="date">。
+ */
+export function DatePicker({
+  value,
+  onChange,
+  label,
+  placeholder,
+  portal = true,
+}: {
+  /** epoch 毫秒时间戳,undefined 表示未选择 */
+  value: number | undefined;
+  onChange: (ts: number | undefined) => void;
+  label: string;
+  placeholder?: string;
+  portal?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | undefined>();
+
+  // 从 timestamp 解析年月日
+  const parsed = value !== undefined ? new Date(value) : null;
+  const [year, setYear] = useState(parsed?.getFullYear() ?? new Date().getFullYear());
+  const [month, setMonth] = useState(parsed ? parsed.getMonth() : new Date().getMonth());
+  const [day, setDay] = useState(parsed?.getDate() ?? new Date().getDate());
+
+  // 打开时同步当前值
+  useEffect(() => {
+    if (open) {
+      const d = value !== undefined ? new Date(value) : new Date();
+      setYear(d.getFullYear());
+      setMonth(d.getMonth());
+      setDay(d.getDate());
+    }
+  }, [open, value]);
+
+  const close = useCallback((restoreFocus = false) => {
+    setOpen(false);
+    if (restoreFocus) triggerRef.current?.focus();
+  }, []);
+
+  const commit = useCallback((y: number, m: number, d: number) => {
+    const ts = new Date(y, m, d, 0, 0, 0, 0).getTime();
+    onChange(ts);
+    close(true);
+  }, [onChange, close]);
+
+  const reposition = useCallback(() => {
+    if (!portal) return;
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    setMenuStyle(computeSelectMenuStyle(trigger.getBoundingClientRect(), { align: "left" }));
+  }, [portal]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (ref.current?.contains(target) || dropdownRef.current?.contains(target)) return;
+      close();
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [close, open]);
+
+  useLayoutEffect(() => {
+    if (!open || !portal) return;
+    reposition();
+    const onViewportChange = () => reposition();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [open, portal, reposition]);
+
+  // 显示文本
+  const displayText = value !== undefined
+    ? `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+    : (placeholder ?? label);
+  const isEmpty = value === undefined;
+
+  // 年份范围
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: 11 }, (_, i) => currentYear - 5 + i);
+  // 根据语言环境格式化月份名(只保留数字)
+  const locale = getActiveLocale();
+  const fmtMonth = (m: number) => {
+    // 用 Intl 格式化获取本地化月份缩写，但只要数字部分
+    const d = new Date(2000, m, 1);
+    const full = new Intl.DateTimeFormat(locale === "zh" ? "zh-CN" : locale === "ja" ? "ja-JP" : locale === "ko" ? "ko-KR" : locale === "ru" ? "ru-RU" : locale === "de" ? "de-DE" : "en-US", { month: "short" }).format(d);
+    // 提取数字部分(如 "1月" → "1", "Jan" → "Jan" 保留原样)
+    const num = full.replace(/[^0-9]/g, "");
+    return num || String(m + 1);
+  };
+  // 当月天数
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+  const dropdown = open ? (
+    <div
+      ref={dropdownRef}
+      className="datepicker-dropdown"
+      role="dialog"
+      aria-label={label}
+      style={portal ? { ...menuStyle, zIndex: 60 } : undefined}
+    >
+      <div className="datepicker-row">
+        <select
+          className="datepicker-select datepicker-year"
+          value={year}
+          onChange={e => { setYear(Number(e.target.value)); setDay(Math.min(day, new Date(Number(e.target.value), month + 1, 0).getDate())); }}
+        >
+          {years.map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <select
+          className="datepicker-select"
+          value={month}
+          onChange={e => { setMonth(Number(e.target.value)); setDay(Math.min(day, new Date(year, Number(e.target.value) + 1, 0).getDate())); }}
+        >
+          {Array.from({ length: 12 }, (_, i) => fmtMonth(i)).map((name, i) => <option key={i} value={i}>{name}</option>)}
+        </select>
+        <select
+          className="datepicker-select"
+          value={day}
+          onChange={e => setDay(Number(e.target.value))}
+        >
+          {days.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </div>
+      <div className="datepicker-actions">
+        <button type="button" className="datepicker-clear" onClick={() => { onChange(undefined); close(true); }}>
+          {locale === "zh" ? "清除" : locale === "ja" ? "クリア" : locale === "ko" ? "지우기" : locale === "de" ? "Löschen" : locale === "ru" ? "Сбросить" : "Clear"}
+        </button>
+        <button type="button" className="datepicker-ok" onClick={() => commit(year, month, day)}>
+          {locale === "zh" ? "确定" : locale === "ja" ? "OK" : locale === "ko" ? "확인" : locale === "de" ? "OK" : locale === "ru" ? "OK" : "OK"}
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <div ref={ref} className="custom-select" style={{ position: "relative", display: "inline-block" }}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`select-trigger${isEmpty ? " select-trigger--placeholder" : ""}`}
+        onClick={() => { if (open) close(); else setOpen(true); }}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={label}
+      >
+        <span>{displayText}</span>
+        <IconChevron style={{ width: 12, height: 12, color: "var(--muted)", transform: open ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+      </button>
+      {portal ? (dropdown && createPortal(dropdown, document.body)) : dropdown}
+    </div>
+  );
+}
+
 export interface SelectOption { value: string; label: React.ReactNode }
 
 export function Select({ value, options, onChange, disabled, id, label, describedBy, title, style, align, placement, dropdownStyle, portal = true }: {

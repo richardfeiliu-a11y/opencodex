@@ -2200,28 +2200,112 @@ button.prov-account-row.active { cursor: default; }
 /* Top-align with Storage: centering against the taller filter chips dropped the "Usage" title. */
 .usage-head { flex-wrap: wrap; align-items: flex-start; }
 .usage-filters { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.usage-filters-wrap { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.usage-filters-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .usage-segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; gap: 2px; background: var(--surface); }
 .usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
 .usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
-.usage-filter-row { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.usage-filter-select,
-.usage-filter-input,
-.usage-filter-date {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 4px 10px;
-  font: inherit;
-  min-height: var(--control-touch);
-}
-.usage-filter-select { max-width: 150px; }
-.usage-filter-input { max-width: 180px; }
-.usage-filter-date { max-width: 150px; }
 .usage-source-mark { width: var(--icon-sm); height: var(--icon-sm); flex: 0 0 auto; object-fit: contain; }
 /* Only monochrome source marks (Grok) are inverted for dark themes. Brand-colored
    marks (Claude, Codex/OpenAI) must keep their brand color; inverting shifts the hue. */
 :root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }
+/* Liquid-glass filter row: Select triggers + DatePicker share a cohesive frosted look */
+.usage-filters-row .custom-select { position: relative; }
+.usage-filters-row .select-trigger {
+  background: color-mix(in oklab, canvas 68%, transparent);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 5px 12px;
+  font: inherit;
+  font-size: var(--text-control);
+  min-height: var(--control-touch);
+  color: var(--text);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.06), inset 0 1px 0 rgb(255 255 255 / 0.06);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.usage-filters-row .select-trigger:hover:not(:disabled) {
+  border-color: var(--faint);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 0.10), inset 0 1px 0 rgb(255 255 255 / 0.08);
+}
+.usage-filters-row .select-trigger:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.usage-filters-row .select-dropdown {
+  background: color-mix(in oklab, canvas 78%, transparent);
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.18);
+}
+/* DatePicker dropdown — liquid-glass style matching Select */
+.datepicker-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: var(--z-popover);
+  min-width: 260px;
+  background: color-mix(in oklab, canvas 78%, transparent);
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.18);
+}
+.datepicker-row { display: flex; gap: 6px; margin-bottom: 10px; }
+.datepicker-select {
+  flex: 1 1 0;
+  min-width: 0;
+  background: color-mix(in oklab, canvas 68%, transparent);
+  backdrop-filter: blur(12px) saturate(1.3);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: var(--text-control);
+  cursor: pointer;
+  appearance: none;
+  text-align: center;
+}
+.datepicker-year { flex: 1.6 1 0; }
+.datepicker-select:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.datepicker-actions { display: flex; justify-content: space-between; gap: 8px; }
+.datepicker-clear,
+.datepicker-ok {
+  flex: 1;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklab, canvas 68%, transparent);
+  backdrop-filter: blur(12px) saturate(1.3);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-control);
+  cursor: pointer;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.datepicker-clear:hover,
+.datepicker-ok:hover {
+  border-color: var(--faint);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 0.10);
+}
+.datepicker-ok {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+.select-trigger--placeholder { color: var(--muted); }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .usage-source-mark--mono { filter: invert(1); }
@@ -2232,10 +2316,7 @@ button.prov-account-row.active { cursor: default; }
   .openai-mode-row { align-items: stretch; flex-direction: column; gap: 6px; }
   .openai-mode-control { width: 100%; }
   .openai-mode-control .usage-segmented-btn { flex: 1 1 0; min-width: 0; }
-  .usage-filter-row { width: 100%; }
-  .usage-filter-select,
-  .usage-filter-input,
-  .usage-filter-date { flex: 1 1 auto; max-width: none; }
+  .usage-filters-row { width: 100%; }
 }
 
 @media (max-width: 640px) {
@@ -2243,9 +2324,12 @@ button.prov-account-row.active { cursor: default; }
 }
 
 @media (max-width: 360px) {
-  .usage-filters { width: 100%; flex-direction: column; align-items: stretch; }
+  .usage-filters-wrap { width: 100%; align-items: stretch; }
+  .usage-filters-row { width: 100%; justify-content: stretch; }
   .usage-segmented { width: 100%; }
   .usage-segmented-btn { flex: 1 1 0; }
+  .usage-filters-row .custom-select { flex: 1 1 auto; min-width: 0; }
+  .usage-filters-row .select-trigger { width: 100%; justify-content: space-between; }
 }
 .panel-title { margin: 0 0 12px; font-size: var(--text-body); font-weight: var(--weight-semibold); color: var(--text); }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
