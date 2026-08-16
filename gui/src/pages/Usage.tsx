@@ -11,7 +11,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import { Select, DatePicker, type SelectOption } from "../ui";
-import { dateInputToLocalEnd, dateInputToLocalStart, tsToDateInput, rangeToTimestamps } from "../usage-date-utils";
+import { rangeToTimestamps } from "../usage-date-utils";
 
 type Range = "all" | "30d" | "7d" | "today" | "yesterday" | "thisMonth" | "lastMonth" | "custom";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
