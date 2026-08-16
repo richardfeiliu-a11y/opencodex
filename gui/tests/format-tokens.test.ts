@@ -1,90 +1,30 @@
 import { describe, expect, test } from "bun:test";
-import { formatTokens, formatTokensExact } from "../src/format-tokens";
+import { formatTokens } from "../src/format-tokens";
 
 describe("formatTokens", () => {
-  // §12.4 边界值(英文 locale)
-  test("en: below 10k stays as-is", () => {
-    expect(formatTokens(999, "en")).toBe("999");
+  test("western locales use K/M/B/T with one decimal", () => {
+    expect(formatTokens(500, "en")).toBe("500");
+    expect(formatTokens(12_000, "en")).toBe("12K");
+    expect(formatTokens(1_234_000, "en")).toBe("1.2M");
+    expect(formatTokens(1_234_000_000, "en")).toBe("1.2B");
   });
-  test("en: 1,000 -> 1000 (below 10k threshold, shown as-is)", () => {
-    // §12.3 保持 formatTokens 的 1e4 阈值:1,000 未达 10K,原样显示。
-    // (报告 §12.1 表格的 "1K" 基于 br() 的 1e3 阈值;真实主格式化器 formatTokens 是 1e4 阈值。)
-    expect(formatTokens(1000, "en")).toBe("1000");
-  });
-  test("en: 12,340 -> 12.34K (2 decimals)", () => {
-    expect(formatTokens(12340, "en")).toBe("12.34K");
-  });
-  test("en: 10,030 -> 10.03K (no float floor error)", () => {
-    expect(formatTokens(10030, "en")).toBe("10.03K");
-  });
-  test("en: 10,200 -> 10.2K (trailing zero trimmed)", () => {
-    expect(formatTokens(10200, "en")).toBe("10.2K");
-  });
-  test("en: 999,999 -> 999.99K (not rounded to 1M)", () => {
-    expect(formatTokens(999999, "en")).toBe("999.99K");
-  });
-  // 跨档边界(审查 P1):四舍五入会让 999.999 进位到 1000,必须截断
-  test("en: 99,999,999 -> 99.99M (not rounded to 100M)", () => {
-    expect(formatTokens(99999999, "en")).toBe("99.99M");
-  });
-  test("en: 999,999,999 -> 999.99M (not rounded to 1B)", () => {
-    expect(formatTokens(999999999, "en")).toBe("999.99M");
-  });
-  test("en: 1,000,000 -> 1M", () => {
-    expect(formatTokens(1000000, "en")).toBe("1M");
-  });
-  test("en: 100,000,000 -> 100M (integer)", () => {
-    expect(formatTokens(100000000, "en")).toBe("100M");
-  });
-  test("en: 128,394,822 -> 128.39M", () => {
-    expect(formatTokens(128394822, "en")).toBe("128.39M");
-  });
-  test("en: 1,000,000,000 -> 1B", () => {
-    expect(formatTokens(1000000000, "en")).toBe("1B");
-  });
-  test("en: 1,234,567,890 -> 1.23B", () => {
-    expect(formatTokens(1234567890, "en")).toBe("1.23B");
-  });
-  test("en: zero and negative are stable", () => {
-    expect(formatTokens(0, "en")).toBe("0");
-    expect(formatTokens(-5, "en")).toBe("-5");
-  });
-  // CJK 分支不回归
-  test("zh: 12,340 -> 1.23万 (myriad scale preserved)", () => {
-    expect(formatTokens(12340, "zh")).toBe("1.23万");
-  });
-  test("zh: 1,234,567 -> 123.45万 (truncated, not rounded)", () => {
-    expect(formatTokens(1234567, "zh")).toBe("123.45万");
-  });
-  test("ko: 1,234,567 -> 123.45만 (myriad scale, truncated)", () => {
-    expect(formatTokens(1234567, "ko")).toBe("123.45만");
-  });
-  // 千分位精确值
-  test("exact: 1,234,567 -> 1,234,567", () => {
-    expect(formatTokensExact(1234567)).toBe("1,234,567");
-  });
-  test("exact: 0 -> 0", () => {
-    expect(formatTokensExact(0)).toBe("0");
-  });
-});
 
-import { formatRequestCount } from "../src/provider-workspace/usage";
+  test("CJK locales use myriad units", () => {
+    expect(formatTokens(12_000, "zh")).toBe("1.2万");
+    expect(formatTokens(12_000, "ko")).toBe("1.2만");
+  });
 
-describe("formatRequestCount", () => {
-  test("en: 1,000 -> 1k (aligned to max-2-decimals)", () => {
-    expect(formatRequestCount(1000, "en")).toBe("1k");
+  test("German branch uses Tsd./Mio./Mrd. with comma decimals and floor truncation", () => {
+    expect(formatTokens(500, "de")).toBe("500");
+    expect(formatTokens(12_000, "de")).toBe("12Tsd.");
+    expect(formatTokens(999_999, "de")).toBe("999,99Tsd.");
+    expect(formatTokens(1_234_000, "de")).toBe("1,23Mio.");
+    expect(formatTokens(1_234_000_000, "de")).toBe("1,23Mrd.");
   });
-  test("en: 12,340 -> 12.34k", () => {
-    expect(formatRequestCount(12340, "en")).toBe("12.34k");
-  });
-  test("en: 128,394,822 -> 128.39M", () => {
-    expect(formatRequestCount(128394822, "en")).toBe("128.39M");
-  });
-  // 跨档边界:截断而非四舍五入
-  test("en: 999,999 -> 999.99k (not 1000k)", () => {
-    expect(formatRequestCount(999999, "en")).toBe("999.99k");
-  });
-  test("de: 12,340 -> 12,3 Tsd. (German branch preserved)", () => {
-    expect(formatRequestCount(12340, "de")).toBe("12,3 Tsd.");
+
+  test("locale matching is case- and script-insensitive", () => {
+    expect(formatTokens(12_000, "de-DE")).toBe("12Tsd.");
+    expect(formatTokens(12_000, "de-CH")).toBe("12Tsd.");
+    expect(formatTokens(12_000, "ZH-CN")).toBe("1.2万");
   });
 });

@@ -36,3 +36,43 @@ export function tsToDateInput(ts: number): string {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
+/** 时间范围选择; all 表示不设时间下限, custom 表示用户自定义 from/to。 */
+export type Range = "all" | "30d" | "7d" | "today" | "yesterday" | "thisMonth" | "lastMonth" | "custom";
+
+const DAY_MS = 86_400_000;
+
+/**
+ * 把快捷范围转换为 from/to 时间戳。
+ * 返回空对象表示不设时间限制(等价 range=all)。
+ */
+export function rangeToTimestamps(range: Range): { from?: number; to?: number } {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
+  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+  switch (range) {
+    case "all":
+      return {};
+    case "30d":
+      return { from: Date.now() - 30 * DAY_MS };
+    case "7d":
+      return { from: Date.now() - 7 * DAY_MS };
+    case "today":
+      return { from: todayStart, to: todayEnd };
+    case "yesterday": {
+      const yStart = todayStart - DAY_MS;
+      const yEnd = todayEnd - DAY_MS;
+      return { from: yStart, to: yEnd };
+    }
+    case "thisMonth": {
+      const mStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime();
+      return { from: mStart, to: todayEnd };
+    }
+    case "lastMonth": {
+      const lmStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0).getTime();
+      const lmEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999).getTime();
+      return { from: lmStart, to: lmEnd };
+    }
+    case "custom":
+      return {};
+  }
+}

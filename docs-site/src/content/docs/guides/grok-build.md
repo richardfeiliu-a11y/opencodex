@@ -61,6 +61,13 @@ in Codex. Models with an empty tier list keep no effort control, matching Codex
 behavior. Native GPT-5.6 entries are separate: they preserve and expose their pinned
 upstream reasoning ladders rather than provider-configured routed metadata.
 
+Grok Build talks to opencodex over Chat Completions and sends `reasoning_effort` when
+the ladder is advertised. The Chat Completions inbound translator defaults the internal
+Responses `reasoning.summary` to `auto` in that case, so thinking traces reach Grok as
+`delta.reasoning_content` instead of being hidden. Set `include_reasoning: false` (or
+`reasoning.summary: "none"`) if a client wants the model to think without returning the
+trace. An explicit `reasoning.summary` wins when both knobs are present.
+
 ## Authentication note
 
 Grok Build requires a non-empty API key for custom models even on loopback. The injected
@@ -127,11 +134,12 @@ the id `grok-4.5`. Generated aliases avoid dots entirely for this reason.
   rejects unknown event types, so a manually configured `api_backend = "responses"` model
   can fail mid-turn on slow upstreams. The auto-registered entries pin
   `api_backend = "chat_completions"`, which never surfaces raw heartbeat frames.
-- **Service-installed `ocx restart`:** when opencodex runs under a service manager,
-  `ocx restart` currently stops the service and replaces it with an unmanaged process —
-  service persistence (auto-restart, start-at-login) is lost until the next
-  `ocx service` setup, and if that unmanaged process dies the managed block can point at
-  a dead proxy until the next `ocx start`/`ocx ensure` refreshes it.
+- **Service-installed `ocx restart`:** the running proxy owns restart authorization and drain
+  coordination, while the installed service manager launches the replacement after the old process
+  exits. Service supervision remains installed. On loopback auto-registration, the managed block
+  also remains in place across the handoff; non-loopback deployments use manually managed Grok
+  configuration instead. The command succeeds only after a different, identity-verified process is
+  healthy on the same port.
 - **Config read timing:** start opencodex first, then launch `grok` for the most
   predictable results. Grok Build watches `~/.grok/config.toml` and reloads when the
   `[model]` table actually changes (roughly a one-second debounce, compared by content), so

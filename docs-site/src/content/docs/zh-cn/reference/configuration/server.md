@@ -13,18 +13,19 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `port` | `number` | `10100` | 代理监听端口。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 绑定地址。非回环绑定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
 | `proxy?` | `string` | — | 出站 HTTP(S) 代理 URL，或 `${ENV_VAR}`。仅当 `HTTP_PROXY` / `HTTPS_PROXY` 未设置时才会应用；回环地址始终保留在 `NO_PROXY` 中。 |
+| `emptyCompletionRetry?` | `boolean` | `false` | 显式启用：当 Responses 完成时既无文本也无工具调用，使用相同请求重试一次。重试可能产生费用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不修改配置的情况下禁用；combo 与 routed-compaction turn 不参与。 |
 | `stallTimeoutSec?` | `number` | `300` | 在上游没有数据之前可等待的秒数，超过后返回 `response.incomplete`。最小值为 1。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次尝试的 DNS/TCP/TLS/最终响应头截止时间；它在正文生成之前结束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 优雅停机截止时间，超过后会中止仍在进行中的请求。 |
-| `websockets?` | `boolean` | `false` | 为 Responses WebSocket 路径声明 `supports_websockets`。设为 false 会保留 HTTP/SSE。 |
-| `corsAllowOrigins?` | `string[]` | `[]` | 额外的精确 CORS 来源。回环来源始终允许。 |
+| `websockets?` | `boolean` | `false` | 声明并允许面向客户端的 Responses WebSocket 路径。设为 false 时客户端使用 HTTP/SSE；它不会禁用符合条件的 canonical ChatGPT 上游 WS 优化。 |
+| `corsAllowOrigins?` | `string[]` | `[]` | CORS 额外允许的精确 origin。loopback origin 始终允许；支持 `chrome-extension://<扩展 ID>` 等基于 authority 的浏览器扩展 origin，`*` 不是通配符。Firefox 和 Safari 会（每次安装/启动浏览器时）重新生成扩展 UUID，origin 变化后请更新该条目。 |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 管理平面和非回环绑定上的数据平面身份验证可接受的已生成 `ocx_…` 凭据。由仪表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 可选启用的归档会话清理策略。不会被隐式启用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 可逐出应用自有日志、缓存、blob 和续传载荷的内存上限，单位 MiB。范围 64–4096；不是 RSS 上限。 |
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成外部 Codex 更新并覆盖安装的 shim 之后恢复该 shim。环境退出开关：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容性。原始元数据会被备份，并由 `ocx stop` / `ocx restore` 恢复。 |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 将识别出的 Codex 辅助/影子调用以低努力级别重定向到选定模型。默认源前缀为 `gpt-5.4-mini` 和 `gpt-5.6-luna`。 |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | 将识别出的 Codex 辅助/影子调用以低努力级别重定向到选定模型。默认源前缀为 `gpt-5.6-luna`；0.144.x 及更早客户端使用 `gpt-5.4-mini`，可通过 `sourceModels` 恢复。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 在可用时启用 | Web 搜索侧车选项。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | 在可用时启用 | 图像描述侧车选项。 |
 | `images?` | `OcxImagesConfig` | 自动选择 OpenAI | 用于 Codex `image_gen` 的独立 Images 转发选项。 |
@@ -54,10 +55,15 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | 不接受 | **必需** | 不接受 |
 | `/v1/chat/completions` | 不接受 | **必需** | 不接受 |
 | `/v1/messages` | 接受 | 接受 | 接受 |
+| `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 
 Responses 和 Chat Completions 会保留 `Authorization`，以便将来可能支持 Codex Direct 透传，因此这里只接受专用的准入头。仪表板生成的 `apiKeys` 可以在启动后替换
 环境令牌；候选项按常量时间比较。
+
+Messages 和 `count_tokens` 为兼容路由客户端仍接受三种准入形式。但在非回环绑定上，原生 Anthropic 透传只通过
+`x-opencodex-api-key` 接受代理准入，并把 `Authorization` 和 `x-api-key` 保留给 Anthropic
+凭据。放入这些提供方请求头的代理准入密钥会在转发前被移除。
 
 :::caution[LAN 暴露]
 绑定到 `0.0.0.0` 会将代理及其配置的提供方访问暴露给局域网。仅应在受信任
@@ -95,7 +101,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code (`claudeCode`)
 
-这些设置控制 `/v1/messages`、`ocx claude` 启动器，以及 Claude 仪表板页面。
+这些设置控制 `/v1/messages`、`/v1/messages/count_tokens`、`ocx claude` 启动器，以及 Claude 仪表板页面。
 
 | 键 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -118,7 +124,7 @@ Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-5.6-luna"]
   }
 }
 ```
@@ -159,9 +165,10 @@ routed 重放会把主 ChatGPT 认证注入内部请求。Anthropic 后端使用
 | `enabled?` | `boolean` | 在可用时启用 | 图像描述总开关。 |
 | `backend?` | `"openai" \| "anthropic"` | auto | 与 web search 相同的显式优先、感知 Anthropic 凭据的选择方式。 |
 | `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.4-mini`，Anthropic 使用 `claude-sonnet-5`。 |
+| `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses 推理强度；Anthropic 会忽略该项。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 每个主轮次允许的新增描述缓存未命中次数。`0` 会禁用调用；无效值会使用默认值。 |
-| `timeoutMs?` | `number` | `45000` | 侧车获取超时。 |
+| `timeoutMs?` | `number` | `45000` | 侧车获取超时。整数 1–2147483647。 |
 
-Vision 只会对发送给其提供方 `noVisionModels` 中模型的图像生效。OpenAI 具有与 search 相同的登录/forward 要求；显式选择的 Anthropic 在没有可用凭据时会失败并关闭。成功的 `data:` 描述会使用一个受限缓存，其键由后端、模型、detail、图像字节以及规范化消息上下文组成。命中和同轮重复不会消耗限额。远程 `https:` 图像以及失败或空的描述不会被缓存。
+支持的等级受上游提供方能力与所选模型公布的推理阶梯限制。Vision 只会对发送给其提供方 `noVisionModels` 中模型的图像生效。OpenAI 具有与 search 相同的登录/forward 要求；显式选择的 Anthropic 在没有可用凭据时会失败并关闭。成功的 `data:` 描述会使用一个受限缓存，其键由后端、模型、detail、图像字节以及规范化消息上下文组成；OpenAI 的键还会额外包含推理强度（Anthropic 键不含）。命中和同轮重复不会消耗限额。远程 `https:` 图像以及失败或空的描述不会被缓存。
 
 Anthropic OAuth 侧车会复用 opencodex 现有的 Claude Code OAuth 指纹。请对目标账户和负载进行 soak 测试。

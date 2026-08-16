@@ -212,8 +212,10 @@ describe("GET /api/system/memory", () => {
 	    expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
     // responseState is a scalar-only continuation-store attribution block: every field is a
     // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
+    // The exact count is pinned on purpose: a new field must be reviewed for privacy safety
+    // before it reaches this surface. 12 since #1597 added `replayScopeMismatchDrops`.
     const responseStateValues = Object.values(body.responseState);
-    expect(responseStateValues).toHaveLength(11);
+    expect(responseStateValues).toHaveLength(12);
     expect(responseStateValues.every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
     expect(body.responseState.count).toBeGreaterThanOrEqual(0);
     expect(body.appOwnedBytes).toEqual({
@@ -261,6 +263,45 @@ describe("GET /api/system/memory", () => {
     expect(body.watchdog).toBeNull();
   });
 
+  test("serializes only an allowlisted Bun runtime provenance, omitting it otherwise (#848)", async () => {
+    const inherited = process.env.OCX_BUN_RUNTIME_SOURCE;
+    const read = async (): Promise<{ bunRuntimeSource?: unknown; bunRevision?: unknown }> => {
+      const req = new Request("http://127.0.0.1:10100/api/system/memory");
+      const res = await handleManagementAPI(req, new URL(req.url), config());
+      return await res!.json() as { bunRuntimeSource?: unknown; bunRevision?: unknown };
+    };
+    try {
+      for (const source of ["override", "bundled", "process"]) {
+        process.env.OCX_BUN_RUNTIME_SOURCE = source;
+        // Source alone is not enough: the marker must name THIS executable.
+        expect((await read()).bunRuntimeSource).toBeUndefined();
+        process.env.OCX_BUN_RUNTIME_PATH = process.execPath;
+        expect((await read()).bunRuntimeSource).toBe(source);
+        delete process.env.OCX_BUN_RUNTIME_PATH;
+      }
+      // A mismatched recorded path describes another binary — stay absent.
+      process.env.OCX_BUN_RUNTIME_SOURCE = "override";
+      process.env.OCX_BUN_RUNTIME_PATH = "/usr/local/bin/definitely-not-this-bun";
+      expect((await read()).bunRuntimeSource).toBeUndefined();
+      delete process.env.OCX_BUN_RUNTIME_PATH;
+      delete process.env.OCX_BUN_RUNTIME_SOURCE;
+      // An unset or unrecognized marker must leave the field absent rather than
+      // shipping a value doctor would then have to distrust.
+      const unset = await read();
+      expect(unset.bunRuntimeSource).toBeUndefined();
+      expect(typeof unset.bunRevision).toBe("string");
+
+      process.env.OCX_BUN_RUNTIME_SOURCE = "system";
+      expect((await read()).bunRuntimeSource).toBeUndefined();
+    } finally {
+      if (inherited === undefined) delete process.env.OCX_BUN_RUNTIME_SOURCE;
+      else process.env.OCX_BUN_RUNTIME_SOURCE = inherited;
+      delete process.env.OCX_BUN_RUNTIME_PATH;
+    }
+    // The route costs ~600 ms per read on the shared CI runners, and this test makes
+    // eight of them — marginally over bun's 5 s default on a loaded box.
+  }, 20_000);
+
   test("GET system memory includes privacy-safe appOwnedBytes scalars", async () => {
     registerDefaultAppOwnedMemoryStores();
     const req = new Request("http://127.0.0.1:10100/api/system/memory");
@@ -270,7 +311,7 @@ describe("GET /api/system/memory", () => {
     expect(Object.keys(body.appOwnedBytes.stores).sort()).toEqual([
       "antigravity_replay", "claude_debug", "crash_ring", "cursor_blobs", "image_normalize",
       "injection_debug", "model_cache", "provider_debug", "request_log", "responses_continuation",
-      "usage_summary", "vision_descriptions",
+      "usage_snapshot", "usage_summary", "vision_descriptions",
     ]);
     expect(Object.values(body.appOwnedBytes.stores).flatMap(snapshot => Object.values(snapshot))
       .every(value => value === null || typeof value === "number")).toBe(true);

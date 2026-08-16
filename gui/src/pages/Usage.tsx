@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
+import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
-import { CompactNumber } from "../components/CompactNumber";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { EmptyState, Notice } from "../ui";
@@ -10,15 +10,19 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
-import { RequestHistoryTable } from "../components/RequestHistoryTable";
-import { TokenTrend } from "../components/TokenTrend";
-import {
-  useRequestHistory,
-  type Range,
-  type UsageFilters,
-  type UsageSurface,
-} from "../hooks/useRequestHistory";
-import { dateInputToLocalEnd, dateInputToLocalStart, tsToDateInput } from "../usage-date-utils";
+import { Select, DatePicker, type SelectOption } from "../ui";
+import { rangeToTimestamps } from "../usage-date-utils";
+
+type Range = "all" | "30d" | "7d" | "today" | "yesterday" | "thisMonth" | "lastMonth" | "custom";
+type UsageSurface = "all" | "codex" | "claude" | "grok";
+
+export interface UsageFilters {
+  provider?: string;
+  model?: string;
+  status?: "2xx" | "4xx" | "5xx";
+  from?: number;
+  to?: number;
+}
 
 interface UsageSummaryTotals {
   requests: number;
@@ -94,6 +98,11 @@ interface UsageResponse {
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;
   entriesDropped: number;
+  // Bounds of the rows the bounded reader loaded, before any range or surface filtering.
+  // Describes the read, not the query, and is never a completeness claim (#1497).
+  // Optional because a dashboard can talk to a proxy that predates these fields.
+  snapshotWindowStart?: number | null;
+  snapshotWindowEnd?: number | null;
   error?: string;
 }
 
@@ -207,11 +216,12 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
   return { weeks, months, buckets };
 }
 
-export function UsageFilters({
+function UsageFilters({
   surface,
   range,
   filters,
   providers,
+  models,
   onSurface,
   onRange,
   onFilters,
@@ -221,112 +231,135 @@ export function UsageFilters({
   range: Range;
   filters: UsageFilters;
   providers: string[];
+  models: string[];
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
   onFilters: (filters: UsageFilters) => void;
   t: TFn;
 }) {
   const setFilter = (patch: Partial<UsageFilters>) => onFilters({ ...filters, ...patch });
-  const providerSuggestions = Array.from(new Set(["openai", "claude", "grok", ...providers]));
   const statusChoices: { label: string; value?: string }[] = [
     { label: t("usage.filter.statusAll"), value: undefined },
     { label: "2xx", value: "2xx" },
     { label: "4xx", value: "4xx" },
     { label: "5xx", value: "5xx" },
   ];
+  // Provider dropdown options: "All" + every unique provider from API data.
+  const providerOptions: SelectOption[] = [
+    { value: "", label: t("usage.filter.providerAll") },
+    ...providers.map(p => ({ value: p, label: p })),
+  ];
+  // Model dropdown options: "All" + models filtered by the selected provider (if any).
+  const filteredModelNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const m of models) {
+      if (!filters.provider || m.split("/")[0] === filters.provider) {
+        names.add(m);
+      }
+    }
+    return Array.from(names).sort();
+  }, [models, filters.provider]);
+  const modelOptions: SelectOption[] = [
+    { value: "", label: t("usage.filter.modelAll") },
+    ...filteredModelNames.map(m => ({ value: m, label: m })),
+  ];
+  const statusOptions: SelectOption[] = statusChoices.map(c => ({
+    value: c.value ?? "",
+    label: c.label,
+  }));
+  const rangeChoices: Array<[Range, string]> = [
+    ["all", t("usage.range.available")],
+    ["today", t("usage.range.today")],
+    ["7d", t("usage.range.7d")],
+    ["30d", t("usage.range.30d")],
+    ["thisMonth", t("usage.range.thisMonth")],
+    ["lastMonth", t("usage.range.lastMonth")],
+    ["custom", t("usage.range.custom")],
+  ];
   return (
     <div className="usage-filters">
-      <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
-        {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
-          const label = t(`logs.filter.surface.${choice}`);
-          return (
+      <div className="usage-filters-row">
+        <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
+          {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
+            const label = t(`logs.filter.surface.${choice}`);
+            return (
+              <button
+                key={choice}
+                type="button"
+                className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
+                aria-label={label}
+                aria-pressed={surface === choice}
+                onClick={() => onSurface(choice)}
+              >
+                {choice === "codex" && (
+                  <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
+                )}
+                {choice === "claude" && (
+                  <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
+                )}
+                {choice === "grok" && (
+                  <img className="usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
+                )}
+                <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
+                  {label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
+          {rangeChoices.map(([value, label]) => (
             <button
-              key={choice}
+              key={value}
               type="button"
-              className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
+              className={`usage-segmented-btn${range === value ? " active" : ""}`}
               aria-label={label}
-              aria-pressed={surface === choice}
-              onClick={() => onSurface(choice)}
-            >
-              {choice === "codex" && (
-                <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "claude" && (
-                <img className="usage-source-mark" src="/provider-icons/claude.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "grok" && (
-                <img className="usage-source-mark" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
-              )}
-              <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
-                {label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
-        {(["all", "30d", "7d"] as Range[]).map(choice => {
-          const label = choice === "all" ? t("usage.range.available") : t(`usage.range.${choice}`);
-          return (
-            <button
-              key={choice}
-              type="button"
-              className={`usage-segmented-btn${range === choice ? " active" : ""}`}
-              aria-label={label}
-              aria-pressed={range === choice}
-              onClick={() => onRange(choice)}
+              aria-pressed={range === value}
+              onClick={() => onRange(value)}
             >
               {label}
             </button>
-          );
-        })}
+          ))}
+        </div>
       </div>
-      <div className="usage-filter-row">
-        <input
-          type="text"
-          list="usage-providers"
-          className="usage-filter-select"
-          aria-label={t("usage.filter.provider")}
-          placeholder={t("usage.filter.providerAll")}
+      <div className="usage-filters-row">
+        <Select
           value={filters.provider ?? ""}
-          onChange={e => setFilter({ provider: e.target.value || undefined })}
+          options={providerOptions}
+          onChange={v => setFilter({ provider: v || undefined })}
+          label={t("usage.filter.provider")}
+          portal
         />
-        <datalist id="usage-providers">
-          {providerSuggestions.map(provider => (
-            <option key={provider} value={provider} />
-          ))}
-        </datalist>
-        <input
-          className="usage-filter-input"
-          aria-label={t("usage.filter.model")}
-          placeholder={t("usage.filter.model")}
+        <Select
           value={filters.model ?? ""}
-          onChange={e => setFilter({ model: e.target.value || undefined })}
+          options={modelOptions}
+          onChange={v => setFilter({ model: v || undefined })}
+          label={t("usage.filter.model")}
+          portal
         />
-        <select
-          className="usage-filter-select"
-          aria-label={t("usage.filter.status")}
+        <Select
           value={filters.status ?? ""}
-          onChange={e => setFilter({ status: e.target.value === "" ? undefined : (e.target.value as UsageFilters["status"]) })}
-        >
-          {statusChoices.map(choice => (
-            <option key={choice.label} value={choice.value ?? ""}>{choice.label}</option>
-          ))}
-        </select>
-        <input
-          className="usage-filter-date"
-          type="date"
-          aria-label={t("usage.filter.from")}
-          value={filters.from !== undefined ? tsToDateInput(filters.from) : ""}
-          onChange={e => setFilter({ from: e.target.value ? dateInputToLocalStart(e.target.value) : undefined })}
+          options={statusOptions}
+          onChange={v => setFilter({ status: v === "" ? undefined : (v as UsageFilters["status"]) })}
+          label={t("usage.filter.status")}
+          portal
         />
-        <input
-          className="usage-filter-date"
-          type="date"
-          aria-label={t("usage.filter.to")}
-          value={filters.to !== undefined ? tsToDateInput(filters.to) : ""}
-          onChange={e => setFilter({ to: e.target.value ? dateInputToLocalEnd(e.target.value) : undefined })}
-        />
+        {range === "custom" && (
+          <>
+            <DatePicker
+              value={filters.from}
+              onChange={ts => setFilter({ from: ts })}
+              label={t("usage.filter.from")}
+              placeholder={t("usage.filter.from")}
+            />
+            <DatePicker
+              value={filters.to}
+              onChange={ts => setFilter({ to: ts })}
+              label={t("usage.filter.to")}
+              placeholder={t("usage.filter.to")}
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -348,13 +381,13 @@ function UsageSummaryCards({
     <div className="usage-cards usage-cards-3x2" role="group" aria-label={t("usage.title")}>
       <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{summary.requests}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
-      <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><CompactNumber value={summary.totalTokens} locale={locale} className="stat-value" /></div>
+      <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(summary.totalTokens, locale)}</div></div>
       <div className="stat" title={t("usage.card.cachedTokensHint")}>
         <div className="muted">{t("usage.card.cachedTokens")}</div>
-        <CompactNumber value={summary.cacheReadInputTokens ?? summary.cachedInputTokens} locale={locale} className="stat-value" />
+        <div className="stat-value">{formatTokens(summary.cacheReadInputTokens ?? summary.cachedInputTokens, locale)}</div>
         {(summary.cacheCreationInputTokens ?? 0) > 0 && (
           <div className="muted text-caption">
-            {t("usage.card.cacheWriteTokens")}: <CompactNumber value={summary.cacheCreationInputTokens ?? 0} locale={locale} />
+            {t("usage.card.cacheWriteTokens")}: {formatTokens(summary.cacheCreationInputTokens ?? 0, locale)}
           </div>
         )}
       </div>
@@ -419,12 +452,12 @@ function WeekDayBars({ weekBars, locale, t }: { weekBars: UsageDay[]; locale: Lo
                   <div key={`${model.provider}/${model.model}`} className="daybar-tip-row">
                     <span className="daybar-tip-swatch" style={{ background: modelColor(model.model, model.provider) }} />
                     <span className="daybar-tip-name">{modelLabel(model.model)}</span>
-                    <CompactNumber value={model.totalTokens} locale={locale} className="daybar-tip-val" />
+                    <span className="daybar-tip-val">{formatTokens(model.totalTokens, locale)}</span>
                   </div>
                 ))}
               </div>
             )}
-            <CompactNumber value={day.totalTokens} locale={locale} className="daybar-count" />
+            <span className="daybar-count">{formatTokens(day.totalTokens, locale)}</span>
             <span className="daybar-label muted">{label}</span>
           </div>
         );
@@ -580,10 +613,10 @@ function UsageModelsTable({
           {models.map(model => (
             <tr key={`${model.provider}/${model.model}`}>
               <td className="mono">{modelLabel(model.model)}</td>
-              <td className="muted">{model.provider}</td>
+              <td className="muted">{formatProviderDisplayName(model.provider, t)}</td>
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
-              <td className="num"><CompactNumber value={model.totalTokens} locale={locale} className="mono" /></td>
+              <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -640,10 +673,10 @@ function UsageProvidersTable({
         <tbody>
           {providers.map(provider => (
             <tr key={provider.provider}>
-              <td className="mono">{provider.provider}</td>
+              <td className="mono">{formatProviderDisplayName(provider.provider, t)}</td>
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
-              <td className="num"><CompactNumber value={provider.totalTokens} locale={locale} className="mono" /></td>
+              <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -721,7 +754,6 @@ function UsageWorkspaceBody({
   modelQuery,
   onModelQuery,
   sortedProviders,
-  history,
   range,
   locale,
   t,
@@ -734,7 +766,6 @@ function UsageWorkspaceBody({
   modelQuery: string;
   onModelQuery: (query: string) => void;
   sortedProviders: UsageProvider[];
-  history: ReturnType<typeof useRequestHistory>;
   range: Range;
   locale: Locale;
   t: TFn;
@@ -748,7 +779,6 @@ function UsageWorkspaceBody({
       body: data ? (
         <>
           <UsageSummaryCards summary={data.summary} activeDays={activeDays} locale={locale} t={t} />
-          <TokenTrend days={data.days} locale={locale} t={t} />
           <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
         </>
       ) : null,
@@ -768,26 +798,6 @@ function UsageWorkspaceBody({
       body: data
         ? <UsageProvidersTable providers={sortedProviders} locale={locale} t={t} workspace />
         : null,
-    },
-    {
-      id: "requests",
-      label: t("usage.section.requests"),
-      meta: history.hasMore ? `${history.rows.length}+` : `${history.rows.length}`,
-      body: (
-        <section aria-labelledby={sectionAnchorId("usage", "requests")}>
-          <h3 id={sectionAnchorId("usage", "requests")} className="panel-title">{t("usage.section.requests")}</h3>
-          <RequestHistoryTable
-            rows={history.rows}
-            hasMore={history.hasMore}
-            loading={history.loading}
-            error={history.error}
-            loadMore={history.loadMore}
-            onRetry={history.retryFirstPage}
-            t={t}
-            locale={locale}
-          />
-        </section>
-      ),
     },
     {
       id: "coverage",
@@ -824,8 +834,19 @@ function UsageWorkspaceBody({
 /** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
 const usageMemoryCache = new Map<string, UsageResponse>();
 
+/** Stable, ordered filters key so a filter change never serves a stale report. */
+function filtersKey(filters: UsageFilters): string {
+  return JSON.stringify({
+    provider: filters.provider,
+    model: filters.model,
+    status: filters.status,
+    from: filters.from,
+    to: filters.to,
+  });
+}
+
 function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, filters: UsageFilters): string {
-  return `ocx.usage.v1:${apiBase}:${range}:${surface}:${JSON.stringify(filters)}`;
+  return `ocx.usage.v1:${apiBase}:${range}:${surface}:${filtersKey(filters)}`;
 }
 
 function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, filters: UsageFilters): UsageResponse | null {
@@ -845,17 +866,24 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
   const [filters, setFilters] = useState<UsageFilters>({});
-  // 明细与 Summary 共享 range/surface 语义:切换即清空旧明细并重拉第一页。
-  const history = useRequestHistory(apiBase, filters, range, surface);
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
-    const params = new URLSearchParams({ range, surface });
+    const params = new URLSearchParams();
+    params.set("surface", surface);
     if (filters.provider) params.set("provider", filters.provider);
     if (filters.model) params.set("model", filters.model);
     if (filters.status !== undefined) params.set("status", String(filters.status));
-    if (filters.from !== undefined) params.set("from", String(filters.from));
-    if (filters.to !== undefined) params.set("to", String(filters.to));
-    const response = await fetch(`${apiBase}/api/usage?${params}`, { signal });
+    // 快捷范围转为 from/to 时间戳; 自定义日期优先于快捷范围。
+    const rangeTs = rangeToTimestamps(range);
+    const effectiveFrom = filters.from ?? rangeTs.from;
+    const effectiveTo = filters.to ?? rangeTs.to;
+    if (effectiveFrom !== undefined) params.set("from", String(effectiveFrom));
+    if (effectiveTo !== undefined) params.set("to", String(effectiveTo));
+    // range 参数只传后端原生支持的值(all/30d/7d),快捷范围(today/thisMonth 等)不传。
+    if (range === "all" || range === "30d" || range === "7d") {
+      params.set("range", range);
+    }
+    const response = await fetch(`${apiBase}/api/usage?${params.toString()}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
     writeHeldUsage(apiBase, range, surface, filters, next);
@@ -864,11 +892,12 @@ export default function Usage({ apiBase }: { apiBase: string }) {
 
   const resourceKey = usageCacheKey(apiBase, range, surface, filters);
   const cached = readHeldUsage(apiBase, range, surface, filters);
-  // Range, surface and filters identify different reports, so the key changes with all of them.
-  // That prevents a force-loading dependency revalidation from ever showing a previous report as this one.
+  // Range, surface, and filters identify different reports, so the key changes with all of
+  // them. That prevents a force-loading dependency revalidation from ever showing a previous
+  // report as this one.
   const resource = useDataSurface<UsageResponse>(
     resourceKey,
-    [apiBase, range, surface, JSON.stringify(filters)],
+    [apiBase, range, surface, filters],
     loadUsage,
     { isEmpty: () => false, initialData: cached ?? undefined },
   );
@@ -904,6 +933,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
           range={range}
           filters={filters}
           providers={(data?.providers ?? []).map(p => p.provider)}
+          models={(data?.models ?? []).map(m => `${m.provider}/${m.model}`)}
           onSurface={setSurface}
           onRange={setRange}
           onFilters={setFilters}
@@ -924,7 +954,24 @@ export default function Usage({ apiBase }: { apiBase: string }) {
       ) : (
         <>
           {state.showError && <Notice tone="err">{t("usage.loadError")}</Notice>}
-          {data?.historyTruncated && <Notice tone="ok">{t("usage.historyTruncated")}</Notice>}
+          {data?.historyTruncated && (
+            // Naming the loaded window is the point: without it, `30d` and "Available history"
+            // look identical on a busy installation even though both may cover far less than
+            // they claim (#1497). `warn` rather than `ok` because a total that silently omits
+            // in-range rows is a caveat, not a status update.
+            <Notice tone="warn">
+              {(() => {
+                // Both bounds must be renderable before the detailed wording is used: an older
+                // proxy omits the fields entirely, and a hand-edited row can carry a timestamp
+                // outside Date's range. Either way the generic string is the honest fallback.
+                const start = renderableInstant(data.snapshotWindowStart);
+                const end = renderableInstant(data.snapshotWindowEnd);
+                return start !== null && end !== null
+                  ? t("usage.historyTruncatedWindow", { start, end })
+                  : t("usage.historyTruncated");
+              })()}
+            </Notice>
+          )}
           <UsageWorkspaceBody
             data={data}
             heatmap={heatmap}
@@ -934,7 +981,6 @@ export default function Usage({ apiBase }: { apiBase: string }) {
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}
             sortedProviders={sortedProviders}
-            history={history}
             range={range}
             locale={locale}
             t={t}
@@ -943,4 +989,13 @@ export default function Usage({ apiBase }: { apiBase: string }) {
       )}
     </>
   );
+}
+function renderableInstant(value: number | null | undefined): string | null {
+  // The reader preserves whatever timestamp a row carries, including hand-edited values far
+  // outside Date's supported range. A presence check alone would then render the literal
+  // string "Invalid Date" in a notice whose whole job is to be trustworthy, so the bound is
+  // only used once it round-trips through Date.
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const at = new Date(value);
+  return Number.isFinite(at.getTime()) ? at.toLocaleString() : null;
 }

@@ -9,6 +9,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   utimesSync,
@@ -27,12 +28,15 @@ import {
   evictOldestResponseContinuationForBudget,
   expandPreviousResponseInput,
   flushResponseState,
+  markBodyNonPersistable,
   previousResponseConversationId,
   previousResponseProviderState,
   previousResponseReplayFailure,
   previousResponseReplayPrefixLength,
+  previousResponseScopeMismatch,
   recoverStaleResponseStateTemps,
   rememberResponseState,
+  responseAdmissionCountersForTests,
   responseStateMetrics,
   responseStatePersistPendingForTests,
   responseContinuationRetainedStoreSnapshot,
@@ -46,6 +50,7 @@ import {
   deleteResponseSpill,
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
+  setResponseSpillPayloadCapForTests,
   setSpillIoForTest,
   writeResponseSpillDurably,
 } from "../src/responses/spill-store";
@@ -56,6 +61,7 @@ import {
   resetHardenedStateForTests,
   setIcaclsRunnerForTests,
   setPlatformForTests,
+  timedOutSecretPathCountForTests,
 } from "../src/lib/windows-secret-acl";
 
 function feedInspector(
@@ -144,6 +150,51 @@ describe("Responses previous_response_id state", () => {
       (first.output as unknown[])[0],
       { type: "function_call_output", call_id: "call_1", output: "ok" },
     ]);
+  });
+
+  test("replays continuation only inside the originating client task", () => {
+    const firstBody = { model: "cursor/auto", input: "private task A history", store: true };
+    const first = fixedResponse("resp_task_scoped", [
+      { type: "message", role: "assistant", content: "task A answer" },
+    ]);
+    rememberResponseState(firstBody, first, undefined, { clientThreadId: "task-a" });
+
+    const sameTask = expandPreviousResponseInput({
+      model: "cursor/auto",
+      previous_response_id: first.id,
+      input: "continue task A",
+    }, "task-a") as { previous_response_id?: string; input: unknown[] };
+    expect(sameTask.previous_response_id).toBe(first.id);
+    expect(sameTask.input).toEqual([
+      { role: "user", content: "private task A history" },
+      first.output[0],
+      { role: "user", content: "continue task A" },
+    ]);
+    expect(previousResponseScopeMismatch(sameTask)).toBe(false);
+
+    const foreignTask = expandPreviousResponseInput({
+      model: "cursor/auto",
+      previous_response_id: first.id,
+      input: "brand-new task B",
+    }, "task-b") as { previous_response_id?: string; input: string };
+    expect(foreignTask).toEqual({ model: "cursor/auto", input: "brand-new task B" });
+    expect(previousResponseScopeMismatch(foreignTask)).toBe(true);
+    expect(previousResponseReplayPrefixLength(foreignTask)).toBe(0);
+    expect(responseStateMetrics().replayScopeMismatchDrops).toBe(1);
+  });
+
+  test("scoped tasks reject legacy unscoped continuation state", () => {
+    const first = fixedResponse("resp_legacy_unscoped", [
+      { type: "message", role: "assistant", content: "legacy answer" },
+    ]);
+    rememberResponseState({ input: "legacy history" }, first);
+
+    const freshTask = expandPreviousResponseInput({
+      previous_response_id: first.id,
+      input: "new task",
+    }, "task-new");
+    expect(freshTask).toEqual({ input: "new task" });
+    expect(previousResponseScopeMismatch(freshTask)).toBe(true);
   });
 
   test("stores incomplete partial output for previous_response_id replay", () => {
@@ -419,7 +470,7 @@ describe("Responses previous_response_id state", () => {
     const parsed2 = parseRequest(request2);
     expect(parsed2._replayPrefixLen).toBe(3);
     const request2Input = (request2 as { input: Array<Record<string, unknown>> }).input;
-    expect(request2Input[1]).toMatchObject({ role: "developer" });
+    expect(request2Input[0]).toMatchObject({ role: "developer" });
     expect(request2Input[2]).toMatchObject({ type: "function_call" });
     injectDeveloperMessage(parsed2, guidance);
     expect(countRawGuidance(request2)).toBe(1);
@@ -705,13 +756,27 @@ describe("Responses previous_response_id state", () => {
 
   test("replays a durable spill after simulated process restart", async () => {
     setResponseStateByteCapForTests(1_024);
-    rememberLarge("resp_spill_restart", "r".repeat(8_000));
+    rememberResponseState(
+      { model: "test/model", input: "r".repeat(8_000), store: false },
+      fixedResponse("resp_spill_restart", [{ type: "message", role: "assistant", content: "stored" }]),
+      undefined,
+      { force: true, clientThreadId: "task-spill" },
+    );
     await flushResponseState();
     clearResponseStateMemoryForTests();
     setResponseStateByteCapForTests(1_024);
-    const expanded = expandPreviousResponseInput({ previous_response_id: "resp_spill_restart", input: "next" });
+    const expanded = expandPreviousResponseInput(
+      { previous_response_id: "resp_spill_restart", input: "next" },
+      "task-spill",
+    );
     expect((expanded as { input: unknown[] }).input).toHaveLength(3);
     expect(responseStateMetrics().spillStubCount).toBe(1);
+
+    const foreign = expandPreviousResponseInput(
+      { previous_response_id: "resp_spill_restart", input: "foreign" },
+      "task-other",
+    );
+    expect(foreign).toEqual({ input: "foreign" });
   });
 
   test("spill references bind the expected response id and use the locked digest basename", () => {
@@ -981,7 +1046,7 @@ describe("Responses previous_response_id state", () => {
       );
       const items = [{ role: "user", content: "한글🙂" }, ...output];
       const expected = Buffer.byteLength(JSON.stringify({
-        responseId: "resp_다국어", createdAt: at, items, providers,
+        responseId: "resp_다국어", createdAt: at, items, providerOutputStart: 1, providers,
       }), "utf8");
       expect(getStoredResponseBytesForTests()).toBe(expected);
     } finally {
@@ -1226,6 +1291,33 @@ describe("Responses previous_response_id state", () => {
     expect(served).toBe(4_096);
   });
 
+  test("orphan recovery releases temp-keyed ACL memos for owned spill temps", () => {
+    const dir = responseSpillDirectory(home);
+    mkdirSync(dir, { recursive: true });
+    const tempName = ".response-spill.1.abcdef0123456789.tmp";
+    const tempPath = join(dir, tempName);
+    writeFileSync(tempPath, "x");
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(tempPath, old, old);
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
+    try {
+      // A temp-keyed timeout memo exists while the temp is on disk.
+      expect(() => hardenSecretPath(tempPath, { required: true })).toThrow();
+      expect(timedOutSecretPathCountForTests()).toBe(1);
+      const result = recoverOrphanedResponseSpills(new Set(), dir);
+      expect(result.removed).toBe(1);
+      // The orphaned temp's memo is released with it (ephemeral release).
+      expect(timedOutSecretPathCountForTests()).toBe(0);
+    } finally {
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
   test("response-state management metrics keep every added field finite scalar and privacy-safe", () => {
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_private_metric_id", "secret-content".repeat(1_000));
@@ -1416,6 +1508,42 @@ describe("Responses previous_response_id state", () => {
     expect(result.bytesRemoved).toBe("private state".length);
     expect(existsSync(stale)).toBe(false);
     for (const path of [live, current, young, unrelated, directory]) expect(existsSync(path)).toBe(true);
+  });
+
+  test("load sweeps stale temps in a symlinked snapshot's real directory", () => {
+    // Atomic writes place their temp beside the RESOLVED target, so a dotfiles-managed
+    // config dir strands temps where a scan of the literal home would never find them.
+    const realDir = mkdtempSync(join(tmpdir(), "ocx-state-real-"));
+    const realSnapshot = join(realDir, "responses-state.json");
+    writeFileSync(realSnapshot, JSON.stringify({ version: 2, states: [] }));
+    symlinkSync(realSnapshot, join(home, "responses-state.json"));
+
+    // This test drives the REAL load path, whose sweep probes live pids with kill(pid, 0).
+    // A hardcoded "dead" pid can collide with a live process on a shared CI runner, so
+    // probe for a genuinely dead one instead (ESRCH). EPERM means alive-but-not-ours.
+    let deadPid = -1;
+    for (let candidate = 4242; candidate < 5242; candidate++) {
+      if (candidate === process.pid) continue;
+      try {
+        process.kill(candidate, 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+          deadPid = candidate;
+          break;
+        }
+      }
+    }
+    expect(deadPid).toBeGreaterThan(0);
+    const stranded = join(realDir, `responses-state.json.ocx.${deadPid}.1.tmp`);
+    writeFileSync(stranded, "private state");
+    const old = new Date(Date.now() - 60 * 60 * 1_000);
+    utimesSync(stranded, old, old);
+
+    clearResponseStateMemoryForTests();
+    previousResponseProviderState("trigger-load");
+
+    expect(existsSync(stranded)).toBe(false);
+    rmSync(realDir, { recursive: true, force: true });
   });
 
   test("stale temp recovery is best-effort when unlink fails", () => {
@@ -1689,6 +1817,7 @@ describe("Responses previous_response_id state", () => {
         spillWrites: 0,
         spillWriteFailures: 0,
         spillReadFailures: 0,
+        replayScopeMismatchDrops: 0,
       });
     });
 
@@ -1746,6 +1875,7 @@ describe("Responses previous_response_id state", () => {
         spillWrites: 0,
         spillWriteFailures: 0,
         spillReadFailures: 0,
+        replayScopeMismatchDrops: 0,
       });
 
       // The real request path DOES load; the probe then reflects the loaded entry.
@@ -1753,6 +1883,306 @@ describe("Responses previous_response_id state", () => {
       const metrics = responseStateMetrics();
       expect(metrics.count).toBe(1);
       expect(metrics.totalBytes).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe("Responses state admission boundary (oversized direct-spill)", () => {
+  let home: string;
+  const priorHome = process.env["OPENCODEX_HOME"];
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ocx-state-admission-"));
+    process.env["OPENCODEX_HOME"] = home;
+    clearResponseStateMemoryForTests();
+  });
+
+  afterEach(() => {
+    setSpillIoForTest(null);
+    setResponseStateByteCapForTests(null);
+    setResponseSpillPayloadCapForTests(null);
+    clearResponseStateForTests();
+    rmSync(home, { recursive: true, force: true });
+    if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
+    else process.env["OPENCODEX_HOME"] = priorHome;
+  });
+
+  function completedResponse(id: string, text: string) {
+    return {
+      id,
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text }],
+      }],
+    };
+  }
+
+  function expandChained(id: string): unknown {
+    return expandPreviousResponseInput({
+      model: "cursor/auto",
+      previous_response_id: id,
+      input: [{ type: "function_call_output", call_id: "call_next", output: "ok" }],
+    });
+  }
+
+  test("oversized candidate direct-spills without demoting unrelated residents", () => {
+    setResponseStateByteCapForTests(4 * 1024);
+    rememberResponseState({ model: "m", input: "a" }, completedResponse("resp_small_1", "s1"));
+    rememberResponseState({ model: "m", input: "b" }, completedResponse("resp_small_2", "s2"));
+    const directBefore = responseAdmissionCountersForTests().directSpills;
+
+    rememberResponseState({ model: "m", input: "big" }, completedResponse("resp_big", "x".repeat(8 * 1024)));
+
+    expect(responseAdmissionCountersForTests().directSpills).toBe(directBefore + 1);
+    const snapshot = responseContinuationRetainedStoreSnapshot();
+    // Both small entries stay RESIDENT (evictable); the big entry is a stub (pinned).
+    expect(snapshot.evictableBytes).toBeGreaterThan(0);
+    expect(snapshot.pinnedBytes).toBeGreaterThan(0);
+    expect(snapshot.bytes).toBeLessThan(4 * 1024);
+    // All three chains still replay — availability is preserved through the spill.
+    expect((expandChained("resp_small_1") as { input: unknown[] }).input.length).toBeGreaterThan(1);
+    expect((expandChained("resp_small_2") as { input: unknown[] }).input.length).toBeGreaterThan(1);
+    expect((expandChained("resp_big") as { input: unknown[] }).input.length).toBeGreaterThan(1);
+  });
+
+  test("candidate fitting the cap stays resident at the boundary", () => {
+    setResponseStateByteCapForTests(8 * 1024);
+    const directBefore = responseAdmissionCountersForTests().directSpills;
+    rememberResponseState({ model: "m", input: "mid" }, completedResponse("resp_fit", "y".repeat(7 * 1024)));
+    expect(responseAdmissionCountersForTests().directSpills).toBe(directBefore);
+    // Resident, not a stub: resident bytes are the evictable class.
+    expect(responseContinuationRetainedStoreSnapshot().evictableBytes).toBeGreaterThan(0);
+    expect((expandChained("resp_fit") as { input: unknown[] }).input.length).toBeGreaterThan(1);
+  });
+
+  test("admission enforces the real spill envelope at the exact boundary", () => {
+    setResponseStateByteCapForTests(1024);
+    // Learn the true envelope (resident encoding + {version, responseId, ...} wrapper).
+    rememberResponseState({ model: "m", input: "env" }, completedResponse("resp_env", "e".repeat(4096)));
+    const dir = responseSpillDirectory();
+    const files = readdirSync(dir);
+    expect(files.length).toBe(1);
+    const envelope = statSync(join(dir, files[0])).size;
+    clearResponseStateMemoryForTests();
+    // Cap = envelope: admitted (envelope is not ABOVE the cap).
+    setResponseSpillPayloadCapForTests(envelope);
+    const directBefore = responseAdmissionCountersForTests().directSpills;
+    rememberResponseState({ model: "m", input: "env" }, completedResponse("resp_env", "e".repeat(4096)));
+    expect(responseAdmissionCountersForTests().directSpills).toBe(directBefore + 1);
+    clearResponseStateMemoryForTests();
+    // Cap = envelope - 1: the resident encoding still fits, but the real spill
+    // envelope does not — post-write enforcement must tombstone it.
+    setResponseSpillPayloadCapForTests(envelope - 1);
+    const dropsBefore = responseAdmissionCountersForTests().oversizedDrops;
+    rememberResponseState({ model: "m", input: "env" }, completedResponse("resp_env", "e".repeat(4096)));
+    expect(responseAdmissionCountersForTests().oversizedDrops).toBe(dropsBefore + 1);
+  });
+
+  test("candidate above the spill payload ceiling is tombstoned, not retained", () => {
+    setResponseStateByteCapForTests(1024);
+    setResponseSpillPayloadCapForTests(2 * 1024);
+    const dropsBefore = responseAdmissionCountersForTests().oversizedDrops;
+    rememberResponseState({ model: "m", input: "huge" }, completedResponse("resp_huge", "z".repeat(8 * 1024)));
+    expect(responseAdmissionCountersForTests().oversizedDrops).toBe(dropsBefore + 1);
+    const body = {
+      model: "m",
+      previous_response_id: "resp_huge",
+      input: [{ type: "function_call_output", call_id: "c", output: "ok" }],
+    };
+    expandPreviousResponseInput(body);
+    expect(previousResponseReplayFailure(body)?.reason).toBe("spill_failed");
+  });
+
+  test("externally oversized snapshot file is refused before parse", () => {
+    const refusalsBefore = responseAdmissionCountersForTests().snapshotOversizedRefusals;
+    writeFileSync(join(home, "responses-state.json"), `{"version":2,"states":[${" ".repeat(33 * 1024 * 1024)}]}`);
+    // First store access triggers the lazy load.
+    rememberResponseState({ model: "m", input: "x" }, completedResponse("resp_after", "ok"));
+    expect(responseAdmissionCountersForTests().snapshotOversizedRefusals).toBe(refusalsBefore + 1);
+    // The store still works: the new entry is present and replays.
+    expect((expandChained("resp_after") as { input: unknown[] }).input.length).toBeGreaterThan(1);
+  });
+
+  test("spill replay above the payload ceiling fails typed before read", () => {
+    const ref = writeResponseSpillDurably("resp_ceiling", {
+      createdAt: Date.now(),
+      items: [{ role: "user", content: "q".repeat(4096) }],
+    });
+    setResponseSpillPayloadCapForTests(512);
+    expect(readResponseSpill("resp_ceiling", ref)).toEqual({ ok: false, reason: "too_large" });
+    // No-read proof: with the file GONE, a read-first implementation would say
+    // "missing"; the ceiling check fires first.
+    deleteResponseSpill(ref);
+    expect(readResponseSpill("resp_ceiling", ref)).toEqual({ ok: false, reason: "too_large" });
+  });
+
+  test("over-ceiling same-ID tombstone defers the old generation until durable", async () => {
+    setResponseStateByteCapForTests(1024);
+    rememberResponseState({ model: "m", input: "v1" }, completedResponse("resp_tc", "a".repeat(4096)));
+    const dir = responseSpillDirectory();
+    expect(readdirSync(dir).length).toBe(1);
+    // Over the tightened ceiling: tombstone — but the old generation must NOT be
+    // deleted immediately (a crash would strand the durable old snapshot).
+    setResponseSpillPayloadCapForTests(2048);
+    rememberResponseState({ model: "m", input: "v2" }, completedResponse("resp_tc", "b".repeat(4096)));
+    expect(readdirSync(dir).length).toBe(1);
+    await flushResponseState();
+    // After the tombstone is durable, the deferred unlink drains.
+    expect(readdirSync(dir).length).toBe(0);
+  });
+
+  test("same-ID oversized replacement of a spilled entry keeps crash ordering", async () => {
+    setResponseStateByteCapForTests(4096);
+    rememberResponseState({ model: "m", input: "v1" }, completedResponse("resp_ss", "a".repeat(6 * 1024)));
+    const dir = responseSpillDirectory();
+    const gen1 = readdirSync(dir);
+    expect(gen1.length).toBe(1);
+    rememberResponseState({ model: "m", input: "v2" }, completedResponse("resp_ss", "b".repeat(6 * 1024)));
+    // New generation written; old one deferred, not deleted at swap time.
+    expect(readdirSync(dir).length).toBe(2);
+    await flushResponseState();
+    const gen3 = readdirSync(dir);
+    expect(gen3.length).toBe(1);
+    expect(gen3[0]).not.toBe(gen1[0]);
+    // The replacement replays the NEW content.
+    const expanded = expandChained("resp_ss") as { input: unknown[] };
+    expect(JSON.stringify(expanded.input)).toContain("b".repeat(64));
+  });
+
+  test("oversized symlinked snapshot is refused before parse", () => {
+    const target = join(home, "big-snapshot-target.json");
+    writeFileSync(target, `{"version":2,"states":[${" ".repeat(33 * 1024 * 1024)}]}`);
+    symlinkSync(target, join(home, "responses-state.json"));
+    const refusalsBefore = responseAdmissionCountersForTests().snapshotOversizedRefusals;
+    rememberResponseState({ model: "m", input: "x" }, completedResponse("resp_sl", "ok"));
+    expect(responseAdmissionCountersForTests().snapshotOversizedRefusals).toBe(refusalsBefore + 1);
+  });
+
+  test("snapshot symlinked to a non-regular target is never read", () => {
+    // /dev/null is the safe non-regular fixture (a FIFO would block an unfixed
+    // read forever — that hang IS the pre-fix behavior this guards).
+    symlinkSync("/dev/null", join(home, "responses-state.json"));
+    rememberResponseState({ model: "m", input: "x" }, completedResponse("resp_nr", "ok"));
+    expect((expandChained("resp_nr") as { input: unknown[] }).input.length).toBeGreaterThan(1);
+  });
+
+  test("materializing an over-ceiling spill reports spill_too_large", () => {
+    setResponseStateByteCapForTests(1024);
+    rememberResponseState({ model: "m", input: "big" }, completedResponse("resp_mat", "w".repeat(4 * 1024)));
+    // The entry is now a spill stub; tightening the ceiling makes its replay refuse.
+    setResponseSpillPayloadCapForTests(512);
+    const body = {
+      model: "m",
+      previous_response_id: "resp_mat",
+      input: [{ type: "function_call_output", call_id: "c", output: "ok" }],
+    };
+    expandPreviousResponseInput(body);
+    expect(previousResponseReplayFailure(body)?.reason).toBe("spill_too_large");
+  });
+
+  test("direct-spill write failure installs a tombstone and keeps unrelated residents", () => {
+    setResponseStateByteCapForTests(4 * 1024);
+    rememberResponseState({ model: "m", input: "a" }, completedResponse("resp_keep", "keep"));
+    setSpillIoForTest({
+      write: () => {
+        throw new Error("injected write failure");
+      },
+    });
+    rememberResponseState({ model: "m", input: "big" }, completedResponse("resp_fail", "v".repeat(8 * 1024)));
+    setSpillIoForTest(null);
+    const body = {
+      model: "m",
+      previous_response_id: "resp_fail",
+      input: [{ type: "function_call_output", call_id: "c", output: "ok" }],
+    };
+    expandPreviousResponseInput(body);
+    expect(previousResponseReplayFailure(body)?.reason).toBe("spill_failed");
+    expect((expandChained("resp_keep") as { input: unknown[] }).input.length).toBeGreaterThan(1);
+  });
+
+  test("same-ID oversized replacement releases the old resident exactly once", () => {
+    setResponseStateByteCapForTests(8 * 1024);
+    rememberResponseState({ model: "m", input: "old" }, completedResponse("resp_swap", "small"));
+    const bytesBefore = getStoredResponseBytesForTests();
+    rememberResponseState({ model: "m", input: "new" }, completedResponse("resp_swap", "n".repeat(16 * 1024)));
+    const bytesAfter = getStoredResponseBytesForTests();
+    // Only the bounded stub replaced the resident: the delta is the stub/resident
+    // metadata difference, nowhere near the 16 KiB candidate.
+    expect(bytesAfter).toBeLessThan(bytesBefore + 512);
+    // The replacement still replays the NEW (spilled) content.
+    const expanded = expandChained("resp_swap") as { input: unknown[] };
+    expect(expanded.input.length).toBeGreaterThan(1);
+    expect(JSON.stringify(expanded.input)).toContain("n".repeat(64));
+  });
+
+  test("snapshot selection uses UTF-8 bytes, not UTF-16 length", async () => {
+    // 600k 💡 = 1.2M UTF-16 code units (< 2 MiB length cap) but 2.4M UTF-8 bytes (> 2 MiB byte cap).
+    const bulbs = "💡".repeat(600_000);
+    rememberResponseState({ model: "m", input: "multi" }, completedResponse("resp_multibyte", bulbs));
+    await flushResponseState();
+    const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
+    expect(raw).not.toContain("resp_multibyte");
+  });
+
+  /**
+   * Encrypted-agent-task recovery decrypts task text into the request body and promises
+   * in-memory retention bounded by a 15-minute TTL. The continuation cache persists request
+   * input to `responses-state.json`, so recording a recovered body would put that plaintext on
+   * disk with no TTL at all. The guard lives in `rememberResponseState` so every recording path
+   * inherits it.
+   */
+  describe("bodies marked non-persistable never reach the continuation cache", () => {
+    test("a marked body is not stored and its text never reaches the snapshot", async () => {
+      const recovered = {
+        model: "m",
+        input: [{ type: "message", role: "user", content: "RECOVERED-PLAINTEXT-SENTINEL" }],
+      };
+      markBodyNonPersistable(recovered);
+
+      rememberResponseState(recovered, completedResponse("resp_recovered", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      // Not in memory: a later turn replaying that id gets its request back UNEXPANDED,
+      // i.e. with no `input` grafted on from stored history.
+      const replay = expandPreviousResponseInput({ previous_response_id: "resp_recovered" }) as {
+        input?: unknown;
+      };
+      expect(replay.input).toBeUndefined();
+      // Not on disk, and neither is the response id that would have carried it.
+      const raw = existsSync(join(home, "responses-state.json"))
+        ? readFileSync(join(home, "responses-state.json"), "utf-8")
+        : "";
+      expect(raw).not.toContain("RECOVERED-PLAINTEXT-SENTINEL");
+      expect(raw).not.toContain("resp_recovered");
+    });
+
+    test("an unmarked body with identical shape IS stored — the guard is the marker, not the shape", async () => {
+      const ordinary = {
+        model: "m",
+        input: [{ type: "message", role: "user", content: "ORDINARY-INPUT-SENTINEL" }],
+      };
+
+      rememberResponseState(ordinary, completedResponse("resp_ordinary", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
+      expect(raw).toContain("resp_ordinary");
+    });
+
+    test("marking is per-object, so an unrelated body is unaffected", async () => {
+      const marked = { model: "m", input: "marked", store: true };
+      const sibling = { model: "m", input: "sibling", store: true };
+      markBodyNonPersistable(marked);
+
+      rememberResponseState(marked, completedResponse("resp_marked", "ok"), undefined, { force: true });
+      rememberResponseState(sibling, completedResponse("resp_sibling", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
+      expect(raw).not.toContain("resp_marked");
+      expect(raw).toContain("resp_sibling");
     });
   });
 });

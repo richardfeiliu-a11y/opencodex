@@ -1,14 +1,15 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
-import type { PersistedUsageEntry, UsageStatus } from "./log";
-import { estimateComboCost, estimateRequestCost, effectiveServiceTier } from "./cost";
+import { isCodexUsageAccountLogLabel, type PersistedUsageEntry, type UsageStatus } from "./log";
+import { estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext } from "./cost";
 
 export type UsageRange = "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude" | "grok";
+
 export type StatusClass = "2xx" | "3xx" | "4xx" | "5xx";
 
-/** 可选过滤条件,语义与 request-history indexer 一致:顶层精确匹配,不含 attempts。 */
+/** Optional filters, consistent with the request-history indexer: top-level exact match, no attempt expansion. */
 export interface UsageSummaryFilters {
   provider?: string;
   model?: string;
@@ -89,17 +90,40 @@ export interface UsageProvider {
   estimatedCostUsd?: number;
 }
 
+export interface UsageAccount {
+  accountLogLabel: string;
+  ambiguous: boolean;
+  requests: number;
+  attemptCount: number;
+  measuredAttempts: number;
+  reportedAttempts: number;
+  estimatedAttempts: number;
+  unmeteredAttempts: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  usageCoverageRatio: number;
+  estimatedCostUsd?: number;
+  pricedAttempts: number;
+  unpricedAttempts: number;
+  priceCoverageRatio: number;
+}
+
 export interface UsageSummary {
   range: UsageRange;
   surface: UsageSurface;
   since: number | null;
   generatedAt: number;
-  /** 回显本次请求使用的过滤条件;无过滤时为 undefined。 */
+  /** Present only when the caller supplied filters. */
   filters?: UsageSummaryFilters;
   summary: UsageSummaryTotals;
   days: UsageDay[];
   models: UsageModel[];
   providers: UsageProvider[];
+  accounts: UsageAccount[];
 }
 
 const DAY_MS = 86_400_000;
@@ -125,9 +149,23 @@ export function parseUsageSurface(input: string | null | undefined): UsageSurfac
   return "all";
 }
 
-function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
-  if (range === "7d") return { since: now - 7 * DAY_MS, days: 7 };
-  if (range === "30d") return { since: now - 30 * DAY_MS, days: 30 };
+function startOfLocalDay(ts: number): number {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+export function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
+  if (range === "7d") {
+    const start = new Date(startOfLocalDay(now));
+    start.setDate(start.getDate() - 6);
+    return { since: start.getTime(), days: 7 };
+  }
+  if (range === "30d") {
+    const start = new Date(startOfLocalDay(now));
+    start.setDate(start.getDate() - 29);
+    return { since: start.getTime(), days: 30 };
+  }
   return { since: null, days: 0 };
 }
 
@@ -298,7 +336,7 @@ function addEstimatedCost(
     totals.unmeteredRequests += 1;
     return;
   }
-  const tier = effectiveServiceTier(entry);
+  const tier = serviceTierContext(entry);
   const estimate = entry.attempts?.length
     ? estimateComboCost(entry.attempts, undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
@@ -336,8 +374,11 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     m.attemptCount += 1;
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
+  const startOfToday = startOfLocalDay(now);
   for (let i = days - 1; i >= 0; i--) {
-    const key = localDateKey(now - i * DAY_MS);
+    const d = new Date(startOfToday);
+    d.setDate(d.getDate() - i);
+    const key = localDateKey(d.getTime());
     grid.set(key, { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] });
   }
   for (const entry of entries) {
@@ -427,7 +468,7 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
   }
   // Accumulate per-model estimated cost
   for (const entry of entries) {
-    const tier = effectiveServiceTier(entry);
+    const tier = serviceTierContext(entry);
     const estimate = entry.attempts?.length
       ? estimateComboCost(entry.attempts, undefined, tier)
       : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
@@ -536,7 +577,7 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
     }
   }
   for (const entry of entries) {
-    const tier = effectiveServiceTier(entry);
+    const tier = serviceTierContext(entry);
     const estimate = entry.attempts?.length
       ? estimateComboCost(entry.attempts, undefined, tier)
       : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
@@ -559,6 +600,133 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
   return providers.sort((a, b) => b.requests - a.requests);
 }
 
+const LEGACY_AMBIGUOUS_ACCOUNT_LABEL = "legacy-ambiguous";
+
+function legacyCodexAccountLabel(provider: string): string | null {
+  if (baseProviderLabel(provider) !== "openai") return null;
+  const suffix = provider.match(/-(main|p[a-f0-9]{6})$/)?.[1];
+  return suffix ?? LEGACY_AMBIGUOUS_ACCOUNT_LABEL;
+}
+
+function accountLabelForAttribution(provider: string, explicit: unknown): string | null {
+  if (isCodexUsageAccountLogLabel(explicit)) return explicit;
+  return legacyCodexAccountLabel(provider);
+}
+
+function buildAccounts(entries: PersistedUsageEntry[]): UsageAccount[] {
+  const byLabel = new Map<string, UsageAccount>();
+  const requestIds = new Map<string, Set<string>>();
+
+  const add = (input: {
+    requestId: string;
+    provider: string;
+    accountLogLabel?: string;
+    usageStatus: UsageStatus;
+    usage?: PersistedUsageEntry["usage"];
+    totalTokens?: number;
+    estimate: ReturnType<typeof estimateRequestCost>;
+  }): void => {
+    const label = accountLabelForAttribution(input.provider, input.accountLogLabel);
+    if (!label) return;
+    let row = byLabel.get(label);
+    if (!row) {
+      row = {
+        accountLogLabel: label,
+        ambiguous: label === LEGACY_AMBIGUOUS_ACCOUNT_LABEL,
+        requests: 0,
+        attemptCount: 0,
+        measuredAttempts: 0,
+        reportedAttempts: 0,
+        estimatedAttempts: 0,
+        unmeteredAttempts: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens: 0,
+        usageCoverageRatio: 0,
+        pricedAttempts: 0,
+        unpricedAttempts: 0,
+        priceCoverageRatio: 0,
+      };
+      byLabel.set(label, row);
+      requestIds.set(label, new Set());
+    }
+    requestIds.get(label)!.add(input.requestId);
+    row.requests = requestIds.get(label)!.size;
+    row.attemptCount += 1;
+    const measured = input.usage !== undefined && isMeasuredStatus(input.usageStatus);
+    if (!measured) {
+      row.unmeteredAttempts += 1;
+      return;
+    }
+
+    row.measuredAttempts += 1;
+    if (input.usageStatus === "reported") row.reportedAttempts += 1;
+    else if (input.usageStatus === "estimated") row.estimatedAttempts += 1;
+    row.inputTokens += input.usage!.inputTokens;
+    row.outputTokens += input.usage!.outputTokens;
+    const creation = input.usage!.cacheCreationInputTokens;
+    const read = typeof input.usage!.cacheReadInputTokens === "number"
+      ? input.usage!.cacheReadInputTokens
+      : typeof input.usage!.cachedInputTokens === "number" && typeof creation === "number"
+        ? Math.max(0, input.usage!.cachedInputTokens - creation)
+        : input.usage!.cachedInputTokens;
+    if (typeof read === "number") row.cacheReadInputTokens += read;
+    if (typeof creation === "number") row.cacheCreationInputTokens += creation;
+    if (typeof input.usage!.reasoningOutputTokens === "number") {
+      row.reasoningOutputTokens += input.usage!.reasoningOutputTokens;
+    }
+    row.totalTokens += usageDisplayTotalTokens(input.usage, input.totalTokens) ?? 0;
+    if (input.estimate) {
+      row.pricedAttempts += 1;
+      row.estimatedCostUsd = (row.estimatedCostUsd ?? 0) + input.estimate.cost.total;
+    } else {
+      row.unpricedAttempts += 1;
+    }
+  };
+
+  for (const entry of entries) {
+    const tier = serviceTierContext(entry);
+    if (entry.attempts?.length) {
+      for (const attempt of entry.attempts) {
+        add({
+          requestId: entry.requestId,
+          provider: attempt.provider,
+          ...(attempt.accountLogLabel ? { accountLogLabel: attempt.accountLogLabel } : {}),
+          usageStatus: attempt.usageStatus,
+          ...(attempt.usage ? { usage: attempt.usage } : {}),
+          ...(attempt.totalTokens !== undefined ? { totalTokens: attempt.totalTokens } : {}),
+          estimate: estimateAttemptCost(attempt, undefined, tier),
+        });
+      }
+      continue;
+    }
+    add({
+      requestId: entry.requestId,
+      provider: entry.provider,
+      ...(entry.accountLogLabel ? { accountLogLabel: entry.accountLogLabel } : {}),
+      usageStatus: entry.usageStatus,
+      ...(entry.usage ? { usage: entry.usage } : {}),
+      ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
+      estimate: estimateRequestCost({
+        provider: entry.provider,
+        model: entry.model,
+        usage: entry.usage,
+        usageStatus: entry.usageStatus,
+        serviceTier: tier,
+      }),
+    });
+  }
+
+  for (const row of byLabel.values()) {
+    row.usageCoverageRatio = row.attemptCount === 0 ? 0 : row.measuredAttempts / row.attemptCount;
+    row.priceCoverageRatio = row.measuredAttempts === 0 ? 0 : row.pricedAttempts / row.measuredAttempts;
+  }
+  return [...byLabel.values()].sort((a, b) => b.totalTokens - a.totalTokens);
+}
+
 export function summarizeUsage(
   entries: PersistedUsageEntry[],
   range: UsageRange,
@@ -566,14 +734,15 @@ export function summarizeUsage(
   surface: UsageSurface = "all",
   filters?: UsageSummaryFilters,
 ): UsageSummary {
-  // P1 修订:from/to 优先于 range 窗口。传了 from/to 时,since 不再参与裁剪,
-  // 避免与 request-history(无 range,只认 from/to)产生双重裁剪导致计数不一致。
+  // Explicit from/to override the range window: since is skipped so we do not
+  // double-trim against request-history (which has no range, only from/to).
   const hasExplicitTime = filters?.from !== undefined || filters?.to !== undefined;
   const { since } = hasExplicitTime ? { since: null } : rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
-    // 可选过滤条件(顶层精确匹配,与 indexer 一致)必须在 surface 分支之前:
-    // surface 分支会直接 return,放后面会导致 surface ≠ "all" 时过滤被静默忽略。
+    // Optional filters (top-level exact match, matching the indexer) must run
+    // before the surface branches: those return directly, so later placement
+    // would silently skip filters when surface !== "all".
     if (filters?.provider !== undefined && entry.provider !== filters.provider) return false;
     if (filters?.model !== undefined && entry.model !== filters.model) return false;
     if (filters?.status !== undefined) {
@@ -612,5 +781,6 @@ export function summarizeUsage(
     days: buildDayGrid(range, since, now, filteredEntries),
     models: buildModels(filteredEntries, totals.totalTokens),
     providers: buildProviders(filteredEntries, totals.totalTokens),
+    accounts: buildAccounts(filteredEntries),
   };
 }

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -7,6 +16,7 @@ import { ManagementRequest } from "./helpers/management-auth";
 import {
   appendUsageEntry,
   resetUsageReadCacheForTests,
+  usageLogPath,
   type PersistedUsageEntry,
 } from "../src/usage/log";
 import {
@@ -14,7 +24,9 @@ import {
   queryRequestHistory,
   rebuildRequestHistoryIndex,
   requestHistoryRowById,
+  REQUEST_HISTORY_MAX_RECORD_BYTES,
   REQUEST_HISTORY_MAX_PAGE_SIZE,
+  REQUEST_HISTORY_READ_CHUNK_BYTES,
 } from "../src/routing/history/indexer";
 import { InvalidCursorError } from "../src/routing/history/cursor";
 import { HISTORY_DB_FILENAME } from "../src/routing/history/schema";
@@ -109,6 +121,32 @@ describe("request-history index (RI-02)", () => {
     expect(after.meta.lastError).not.toMatch(/identity changed/i);
   });
 
+  test("status class filters rows by HTTP tier", async () => {
+    appendUsageEntry(entry("req-200", 1000, "a", "m1", { status: 200 }));
+    appendUsageEntry(entry("req-404", 1001, "a", "m1", { status: 404 }));
+    appendUsageEntry(entry("req-503", 1002, "a", "m1", { status: 503 }));
+    appendUsageEntry(entry("req-301", 1003, "a", "m1", { status: 301 }));
+
+    const all = await queryRequestHistory({}, undefined, 10);
+    expect(all.rows.length).toBe(4);
+
+    const twos = await queryRequestHistory({ status: "2xx" }, undefined, 10);
+    expect(twos.rows.map(r => r.requestId)).toEqual(["req-200"]);
+
+    const fours = await queryRequestHistory({ status: "4xx" }, undefined, 10);
+    expect(fours.rows.map(r => r.requestId)).toEqual(["req-404"]);
+
+    const fives = await queryRequestHistory({ status: "5xx" }, undefined, 10);
+    expect(fives.rows.map(r => r.requestId)).toEqual(["req-503"]);
+
+    const threes = await queryRequestHistory({ status: "3xx" }, undefined, 10);
+    expect(threes.rows.map(r => r.requestId)).toEqual(["req-301"]);
+
+    // Exact numeric status still works.
+    const exact = await queryRequestHistory({ status: 404 }, undefined, 10);
+    expect(exact.rows.map(r => r.requestId)).toEqual(["req-404"]);
+  });
+
   test("appended rows are ingested as a tail, never a full rebuild", async () => {
     for (const row of seedRows(5)) appendUsageEntry(row);
     const first = await queryRequestHistory({}, undefined, 10);
@@ -194,18 +232,50 @@ describe("request-history index (RI-02)", () => {
 
   test("partial final JSONL line is skipped until it completes", async () => {
     for (const row of seedRows(3)) appendUsageEntry(row);
+    const completeOffset = statSync(usageLogPath()).size;
     // Append a partial line without a trailing newline.
-    const { appendFileSync } = await import("node:fs");
-    const { usageLogPath } = await import("../src/usage/log");
     appendFileSync(usageLogPath(), '{"requestId":"req-partial","timestamp":', "utf-8");
     const page = await queryRequestHistory({}, undefined, 10);
     expect(page.rows.length).toBe(3);
     expect(page.meta.indexedRows).toBe(3);
+    expect(page.meta.indexedOffset).toBe(completeOffset);
     // Completing the line makes it indexable on the next refresh.
     appendFileSync(usageLogPath(), '9999,"provider":"a","model":"m1","status":200,"durationMs":1,"usageStatus":"reported"}\n', "utf-8");
     const after = await queryRequestHistory({}, undefined, 10);
     expect(after.rows.length).toBe(4);
-    expect(after.rows.some(row => row.requestId === "req-partial")).toBe(true);
+    expect(after.rows.filter(row => row.requestId === "req-partial")).toHaveLength(1);
+    expect(after.meta.indexedOffset).toBe(statSync(usageLogPath()).size);
+  });
+
+  test("streaming refresh indexes a valid record that crosses a read chunk", async () => {
+    const large = entry("chunk-spanning", 9998, "a", "m1", {
+      apiKeyId: "x".repeat(REQUEST_HISTORY_READ_CHUNK_BYTES + 1024),
+    });
+    const line = `${JSON.stringify(large)}\n`;
+    expect(Buffer.byteLength(line)).toBeGreaterThan(REQUEST_HISTORY_READ_CHUNK_BYTES);
+    expect(Buffer.byteLength(line)).toBeLessThan(REQUEST_HISTORY_MAX_RECORD_BYTES);
+    appendFileSync(usageLogPath(), line, "utf-8");
+
+    const page = await queryRequestHistory({}, undefined, 10);
+    expect(page.rows.map(row => row.requestId)).toEqual(["chunk-spanning"]);
+    expect(page.meta.indexedOffset).toBe(statSync(usageLogPath()).size);
+  });
+
+  test("streaming refresh skips an oversized record without changing the canonical log", async () => {
+    const oversized = entry("oversized", 9998, "a", "m1", {
+      apiKeyId: "x".repeat(REQUEST_HISTORY_MAX_RECORD_BYTES + 1),
+    });
+    const oversizedLine = `${JSON.stringify(oversized)}\n`;
+    expect(Buffer.byteLength(oversizedLine)).toBeGreaterThan(REQUEST_HISTORY_MAX_RECORD_BYTES);
+    appendFileSync(usageLogPath(), oversizedLine, "utf-8");
+    appendUsageEntry(entry("after-oversized", 9999));
+    const canonical = readFileSync(usageLogPath());
+
+    const page = await queryRequestHistory({}, undefined, 10);
+    expect(page.rows.map(row => row.requestId)).toEqual(["after-oversized"]);
+    expect(page.meta.indexedRows).toBe(1);
+    expect(page.meta.indexedOffset).toBe(canonical.byteLength);
+    expect(readFileSync(usageLogPath())).toEqual(canonical);
   });
 
   test("duplicate replay is ignored", async () => {
@@ -247,55 +317,12 @@ describe("request-history index (RI-02)", () => {
     expect(byProvider.rows.map(row => row.requestId).sort()).toEqual(["f1", "f3"]);
     const byStatus = await queryRequestHistory({ status: 429 }, undefined, 10);
     expect(byStatus.rows.map(row => row.requestId)).toEqual(["f2"]);
-    const byStatusClass = await queryRequestHistory({ status: "4xx" }, undefined, 10);
-    expect(byStatusClass.rows.map(row => row.requestId)).toEqual(["f2"]);
-    const byStatusClassEmpty = await queryRequestHistory({ status: "2xx" }, undefined, 10);
-    // f1/f3 默认 status=200,属于 2xx;timestamp 倒序 f3 在前
-    expect(byStatusClassEmpty.rows.map(row => row.requestId)).toEqual(["f3", "f1"]);
     const byConversation = await queryRequestHistory({ conversationId: "conv-1" }, undefined, 10);
     expect(byConversation.rows.map(row => row.requestId)).toEqual(["f1"]);
     const bySurface = await queryRequestHistory({ surface: "grok" }, undefined, 10);
     expect(bySurface.rows.map(row => row.requestId)).toEqual(["f3"]);
     const byRange = await queryRequestHistory({ from: 1500, to: 2500 }, undefined, 10);
     expect(byRange.rows.map(row => row.requestId)).toEqual(["f2"]);
-  });
-
-  test("surface semantics: codex matches NULL, claude matches both, grok exact, other values exact", async () => {
-    appendUsageEntry(entry("s1", 1000, "a", "m1", {})); // surface 未写 => NULL
-    appendUsageEntry(entry("s2", 2000, "a", "m1", { surface: "claude" }));
-    appendUsageEntry(entry("s3", 3000, "a", "m1", { surface: "claude-desktop" }));
-    appendUsageEntry(entry("s4", 4000, "a", "m1", { surface: "grok" }));
-    await rebuildRequestHistoryIndex();
-
-    // codex 请求不打 surface 字段(IS NULL)
-    const codex = await queryRequestHistory({ surface: "codex" }, undefined, 10);
-    expect(codex.rows.map(row => row.requestId)).toEqual(["s1"]);
-    // claude 包含 claude-desktop
-    const claude = await queryRequestHistory({ surface: "claude" }, undefined, 10);
-    expect(claude.rows.map(row => row.requestId).sort()).toEqual(["s2", "s3"]);
-    // grok 精确匹配
-    const grok = await queryRequestHistory({ surface: "grok" }, undefined, 10);
-    expect(grok.rows.map(row => row.requestId)).toEqual(["s4"]);
-    // 其他字符串(claude-desktop 不在 codex/claude/grok 三个语义分支内)保持精确匹配,向后兼容
-    const claudeDesktop = await queryRequestHistory({ surface: "claude-desktop" }, undefined, 10);
-    expect(claudeDesktop.rows.map(row => row.requestId)).toEqual(["s3"]);
-  });
-
-  test("status class 2xx filters rows by status tier through the API", async () => {
-    appendUsageEntry(entry("g1", 1000, "a", "m1", { status: 201 }));
-    appendUsageEntry(entry("g2", 2000, "a", "m1", { status: 204 }));
-    appendUsageEntry(entry("g3", 3000, "a", "m1", { status: 302 }));
-    appendUsageEntry(entry("g4", 4000, "a", "m1", { status: 500 }));
-    await rebuildRequestHistoryIndex();
-    const res = await apiGet("/api/request-history?status=2xx");
-    expect(res.status).toBe(200);
-    const body = await res.json() as { entries?: Array<{ requestId?: string }>; hasMore?: boolean };
-    expect(body.entries?.map(e => e.requestId).sort()).toEqual(["g1", "g2"]);
-    // 非法大类(6xx)走 400 invalid_status
-    const bad = await apiGet("/api/request-history?status=6xx");
-    expect(bad.status).toBe(400);
-    const badBody = await bad.json() as { error?: { code?: string } };
-    expect(badBody.error?.code).toBe("invalid_status");
   });
 
   test("row-by-id returns the canonical entry and unknown ids 404 through the API", async () => {
