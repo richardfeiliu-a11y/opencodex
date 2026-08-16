@@ -10,9 +10,10 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
-import { dateInputToLocalEnd, dateInputToLocalStart, tsToDateInput } from "../usage-date-utils";
+import { Select, DatePicker, type SelectOption } from "../ui";
+import { dateInputToLocalEnd, dateInputToLocalStart, tsToDateInput, rangeToTimestamps } from "../usage-date-utils";
 
-type Range = "all" | "30d" | "7d";
+type Range = "all" | "30d" | "7d" | "today" | "yesterday" | "thisMonth" | "lastMonth" | "custom";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
 
 export interface UsageFilters {
@@ -220,6 +221,7 @@ function UsageFilters({
   range,
   filters,
   providers,
+  models,
   onSurface,
   onRange,
   onFilters,
@@ -229,113 +231,135 @@ function UsageFilters({
   range: Range;
   filters: UsageFilters;
   providers: string[];
+  models: string[];
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
   onFilters: (filters: UsageFilters) => void;
   t: TFn;
 }) {
   const setFilter = (patch: Partial<UsageFilters>) => onFilters({ ...filters, ...patch });
-  const providerSuggestions = Array.from(new Set(["openai", "claude", "grok", "codex", ...providers]));
   const statusChoices: { label: string; value?: string }[] = [
     { label: t("usage.filter.statusAll"), value: undefined },
     { label: "2xx", value: "2xx" },
     { label: "4xx", value: "4xx" },
     { label: "5xx", value: "5xx" },
   ];
+  // Provider dropdown options: "All" + every unique provider from API data.
+  const providerOptions: SelectOption[] = [
+    { value: "", label: t("usage.filter.providerAll") },
+    ...providers.map(p => ({ value: p, label: p })),
+  ];
+  // Model dropdown options: "All" + models filtered by the selected provider (if any).
+  const filteredModelNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const m of models) {
+      if (!filters.provider || m.split("/")[0] === filters.provider) {
+        names.add(m);
+      }
+    }
+    return Array.from(names).sort();
+  }, [models, filters.provider]);
+  const modelOptions: SelectOption[] = [
+    { value: "", label: t("usage.filter.modelAll") },
+    ...filteredModelNames.map(m => ({ value: m, label: m })),
+  ];
+  const statusOptions: SelectOption[] = statusChoices.map(c => ({
+    value: c.value ?? "",
+    label: c.label,
+  }));
+  const rangeChoices: Array<[Range, string]> = [
+    ["all", t("usage.range.available")],
+    ["today", t("usage.range.today")],
+    ["7d", t("usage.range.7d")],
+    ["30d", t("usage.range.30d")],
+    ["thisMonth", t("usage.range.thisMonth")],
+    ["lastMonth", t("usage.range.lastMonth")],
+    ["custom", t("usage.range.custom")],
+  ];
   return (
     <div className="usage-filters">
-      <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
-        {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
-          const label = t(`logs.filter.surface.${choice}`);
-          return (
+      <div className="usage-filters-row">
+        <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
+          {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
+            const label = t(`logs.filter.surface.${choice}`);
+            return (
+              <button
+                key={choice}
+                type="button"
+                className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
+                aria-label={label}
+                aria-pressed={surface === choice}
+                onClick={() => onSurface(choice)}
+              >
+                {choice === "codex" && (
+                  <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
+                )}
+                {choice === "claude" && (
+                  <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
+                )}
+                {choice === "grok" && (
+                  <img className="usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
+                )}
+                <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
+                  {label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
+          {rangeChoices.map(([value, label]) => (
             <button
-              key={choice}
+              key={value}
               type="button"
-              className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
+              className={`usage-segmented-btn${range === value ? " active" : ""}`}
               aria-label={label}
-              aria-pressed={surface === choice}
-              onClick={() => onSurface(choice)}
-            >
-              {choice === "codex" && (
-                <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "claude" && (
-                <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "grok" && (
-                <img className="usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
-              )}
-              <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
-                {label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
-        {(["all", "30d", "7d"] as Range[]).map(choice => {
-          const label = choice === "all" ? t("usage.range.available") : t(`usage.range.${choice}`);
-          return (
-            <button
-              key={choice}
-              type="button"
-              className={`usage-segmented-btn${range === choice ? " active" : ""}`}
-              aria-label={label}
-              aria-pressed={range === choice}
-              onClick={() => onRange(choice)}
+              aria-pressed={range === value}
+              onClick={() => onRange(value)}
             >
               {label}
             </button>
-          );
-        })}
+          ))}
+        </div>
       </div>
-      <div className="usage-filter-row">
-        <input
-          type="text"
-          list="usage-providers"
-          className="usage-filter-select"
-          aria-label={t("usage.filter.provider")}
-          placeholder={t("usage.filter.providerAll")}
+      <div className="usage-filters-row">
+        <Select
           value={filters.provider ?? ""}
-          onChange={e => setFilter({ provider: e.target.value || undefined })}
+          options={providerOptions}
+          onChange={v => setFilter({ provider: v || undefined })}
+          label={t("usage.filter.provider")}
+          portal
         />
-        <datalist id="usage-providers">
-          {providerSuggestions.map(provider => (
-            <option key={provider} value={provider} />
-          ))}
-        </datalist>
-        <input
-          type="text"
-          className="usage-filter-input"
-          aria-label={t("usage.filter.model")}
-          placeholder={t("usage.filter.model")}
+        <Select
           value={filters.model ?? ""}
-          onChange={e => setFilter({ model: e.target.value || undefined })}
+          options={modelOptions}
+          onChange={v => setFilter({ model: v || undefined })}
+          label={t("usage.filter.model")}
+          portal
         />
-        <select
-          className="usage-filter-select"
-          aria-label={t("usage.filter.status")}
+        <Select
           value={filters.status ?? ""}
-          onChange={e => setFilter({ status: e.target.value === "" ? undefined : (e.target.value as UsageFilters["status"]) })}
-        >
-          {statusChoices.map(choice => (
-            <option key={choice.label} value={choice.value ?? ""}>{choice.label}</option>
-          ))}
-        </select>
-        <input
-          type="date"
-          className="usage-filter-date"
-          aria-label={t("usage.filter.from")}
-          value={filters.from !== undefined ? tsToDateInput(filters.from) : ""}
-          onChange={e => setFilter({ from: e.target.value ? dateInputToLocalStart(e.target.value) : undefined })}
+          options={statusOptions}
+          onChange={v => setFilter({ status: v === "" ? undefined : (v as UsageFilters["status"]) })}
+          label={t("usage.filter.status")}
+          portal
         />
-        <input
-          type="date"
-          className="usage-filter-date"
-          aria-label={t("usage.filter.to")}
-          value={filters.to !== undefined ? tsToDateInput(filters.to) : ""}
-          onChange={e => setFilter({ to: e.target.value ? dateInputToLocalEnd(e.target.value) : undefined })}
-        />
+        {range === "custom" && (
+          <>
+            <DatePicker
+              value={filters.from}
+              onChange={ts => setFilter({ from: ts })}
+              label={t("usage.filter.from")}
+              placeholder={t("usage.filter.from")}
+            />
+            <DatePicker
+              value={filters.to}
+              onChange={ts => setFilter({ to: ts })}
+              label={t("usage.filter.to")}
+              placeholder={t("usage.filter.to")}
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -845,13 +869,20 @@ export default function Usage({ apiBase }: { apiBase: string }) {
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
     const params = new URLSearchParams();
-    params.set("range", range);
     params.set("surface", surface);
     if (filters.provider) params.set("provider", filters.provider);
     if (filters.model) params.set("model", filters.model);
-    if (filters.status !== undefined) params.set("status", filters.status);
-    if (filters.from !== undefined) params.set("from", String(filters.from));
-    if (filters.to !== undefined) params.set("to", String(filters.to));
+    if (filters.status !== undefined) params.set("status", String(filters.status));
+    // 快捷范围转为 from/to 时间戳; 自定义日期优先于快捷范围。
+    const rangeTs = rangeToTimestamps(range);
+    const effectiveFrom = filters.from ?? rangeTs.from;
+    const effectiveTo = filters.to ?? rangeTs.to;
+    if (effectiveFrom !== undefined) params.set("from", String(effectiveFrom));
+    if (effectiveTo !== undefined) params.set("to", String(effectiveTo));
+    // range 参数只传后端原生支持的值(all/30d/7d),快捷范围(today/thisMonth 等)不传。
+    if (range === "all" || range === "30d" || range === "7d") {
+      params.set("range", range);
+    }
     const response = await fetch(`${apiBase}/api/usage?${params.toString()}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
@@ -902,6 +933,7 @@ export default function Usage({ apiBase }: { apiBase: string }) {
           range={range}
           filters={filters}
           providers={(data?.providers ?? []).map(p => p.provider)}
+          models={(data?.models ?? []).map(m => `${m.provider}/${m.model}`)}
           onSurface={setSurface}
           onRange={setRange}
           onFilters={setFilters}
