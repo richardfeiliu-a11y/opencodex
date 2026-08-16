@@ -10,9 +10,18 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
+import { dateInputToLocalEnd, dateInputToLocalStart, tsToDateInput } from "../usage-date-utils";
 
 type Range = "all" | "30d" | "7d";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
+
+export interface UsageFilters {
+  provider?: string;
+  model?: string;
+  status?: "2xx" | "4xx" | "5xx";
+  from?: number;
+  to?: number;
+}
 
 interface UsageSummaryTotals {
   requests: number;
@@ -209,16 +218,30 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
 function UsageFilters({
   surface,
   range,
+  filters,
+  providers,
   onSurface,
   onRange,
+  onFilters,
   t,
 }: {
   surface: UsageSurface;
   range: Range;
+  filters: UsageFilters;
+  providers: string[];
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
+  onFilters: (filters: UsageFilters) => void;
   t: TFn;
 }) {
+  const setFilter = (patch: Partial<UsageFilters>) => onFilters({ ...filters, ...patch });
+  const providerSuggestions = Array.from(new Set(["openai", "claude", "grok", "codex", ...providers]));
+  const statusChoices: { label: string; value?: string }[] = [
+    { label: t("usage.filter.statusAll"), value: undefined },
+    { label: "2xx", value: "2xx" },
+    { label: "4xx", value: "4xx" },
+    { label: "5xx", value: "5xx" },
+  ];
   return (
     <div className="usage-filters">
       <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
@@ -265,6 +288,54 @@ function UsageFilters({
             </button>
           );
         })}
+      </div>
+      <div className="usage-filter-row">
+        <input
+          type="text"
+          list="usage-providers"
+          className="usage-filter-select"
+          aria-label={t("usage.filter.provider")}
+          placeholder={t("usage.filter.providerAll")}
+          value={filters.provider ?? ""}
+          onChange={e => setFilter({ provider: e.target.value || undefined })}
+        />
+        <datalist id="usage-providers">
+          {providerSuggestions.map(provider => (
+            <option key={provider} value={provider} />
+          ))}
+        </datalist>
+        <input
+          type="text"
+          className="usage-filter-input"
+          aria-label={t("usage.filter.model")}
+          placeholder={t("usage.filter.model")}
+          value={filters.model ?? ""}
+          onChange={e => setFilter({ model: e.target.value || undefined })}
+        />
+        <select
+          className="usage-filter-select"
+          aria-label={t("usage.filter.status")}
+          value={filters.status ?? ""}
+          onChange={e => setFilter({ status: e.target.value === "" ? undefined : (e.target.value as UsageFilters["status"]) })}
+        >
+          {statusChoices.map(choice => (
+            <option key={choice.label} value={choice.value ?? ""}>{choice.label}</option>
+          ))}
+        </select>
+        <input
+          type="date"
+          className="usage-filter-date"
+          aria-label={t("usage.filter.from")}
+          value={filters.from !== undefined ? tsToDateInput(filters.from) : ""}
+          onChange={e => setFilter({ from: e.target.value ? dateInputToLocalStart(e.target.value) : undefined })}
+        />
+        <input
+          type="date"
+          className="usage-filter-date"
+          aria-label={t("usage.filter.to")}
+          value={filters.to !== undefined ? tsToDateInput(filters.to) : ""}
+          onChange={e => setFilter({ to: e.target.value ? dateInputToLocalEnd(e.target.value) : undefined })}
+        />
       </div>
     </div>
   );
@@ -739,17 +810,28 @@ function UsageWorkspaceBody({
 /** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
 const usageMemoryCache = new Map<string, UsageResponse>();
 
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
-  return `ocx.usage.v1:${apiBase}:${range}:${surface}`;
+/** Stable, ordered filters key so a filter change never serves a stale report. */
+function filtersKey(filters: UsageFilters): string {
+  return JSON.stringify({
+    provider: filters.provider,
+    model: filters.model,
+    status: filters.status,
+    from: filters.from,
+    to: filters.to,
+  });
 }
 
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageResponse | null {
-  const key = usageCacheKey(apiBase, range, surface);
+function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, filters: UsageFilters): string {
+  return `ocx.usage.v1:${apiBase}:${range}:${surface}:${filtersKey(filters)}`;
+}
+
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, filters: UsageFilters): UsageResponse | null {
+  const key = usageCacheKey(apiBase, range, surface, filters);
   return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
 }
 
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageResponse) {
-  const key = usageCacheKey(apiBase, range, surface);
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, filters: UsageFilters, value: UsageResponse) {
+  const key = usageCacheKey(apiBase, range, surface, filters);
   usageMemoryCache.set(key, value);
   writeSessionListCache(key, value);
 }
@@ -759,22 +841,32 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
+  const [filters, setFilters] = useState<UsageFilters>({});
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
-    const response = await fetch(`${apiBase}/api/usage?range=${range}&surface=${surface}`, { signal });
+    const params = new URLSearchParams();
+    params.set("range", range);
+    params.set("surface", surface);
+    if (filters.provider) params.set("provider", filters.provider);
+    if (filters.model) params.set("model", filters.model);
+    if (filters.status !== undefined) params.set("status", filters.status);
+    if (filters.from !== undefined) params.set("from", String(filters.from));
+    if (filters.to !== undefined) params.set("to", String(filters.to));
+    const response = await fetch(`${apiBase}/api/usage?${params.toString()}`, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
-    writeHeldUsage(apiBase, range, surface, next);
+    writeHeldUsage(apiBase, range, surface, filters, next);
     return next;
-  }, [apiBase, range, surface]);
+  }, [apiBase, range, surface, filters]);
 
-  const resourceKey = usageCacheKey(apiBase, range, surface);
-  const cached = readHeldUsage(apiBase, range, surface);
-  // Range and surface identify different reports, so the key changes with both. That prevents
-  // a force-loading dependency revalidation from ever showing a previous report as this one.
+  const resourceKey = usageCacheKey(apiBase, range, surface, filters);
+  const cached = readHeldUsage(apiBase, range, surface, filters);
+  // Range, surface, and filters identify different reports, so the key changes with all of
+  // them. That prevents a force-loading dependency revalidation from ever showing a previous
+  // report as this one.
   const resource = useDataSurface<UsageResponse>(
     resourceKey,
-    [apiBase, range, surface],
+    [apiBase, range, surface, filters],
     loadUsage,
     { isEmpty: () => false, initialData: cached ?? undefined },
   );
@@ -805,7 +897,16 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head usage-head">
         <h2 id="usage-page-title">{t("usage.title")}</h2>
-        <UsageFilters surface={surface} range={range} onSurface={setSurface} onRange={setRange} t={t} />
+        <UsageFilters
+          surface={surface}
+          range={range}
+          filters={filters}
+          providers={(data?.providers ?? []).map(p => p.provider)}
+          onSurface={setSurface}
+          onRange={setRange}
+          onFilters={setFilters}
+          t={t}
+        />
       </div>
       <p className="page-sub">{t("usage.subtitle")}</p>
 

@@ -7,6 +7,17 @@ import { estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTie
 export type UsageRange = "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude" | "grok";
 
+export type StatusClass = "2xx" | "3xx" | "4xx" | "5xx";
+
+/** Optional filters, consistent with the request-history indexer: top-level exact match, no attempt expansion. */
+export interface UsageSummaryFilters {
+  provider?: string;
+  model?: string;
+  status?: number | StatusClass;
+  from?: number;
+  to?: number;
+}
+
 export interface UsageSummaryTotals {
   requests: number;
   attemptCount: number;
@@ -106,6 +117,8 @@ export interface UsageSummary {
   surface: UsageSurface;
   since: number | null;
   generatedAt: number;
+  /** Present only when the caller supplied filters. */
+  filters?: UsageSummaryFilters;
   summary: UsageSummaryTotals;
   days: UsageDay[];
   models: UsageModel[];
@@ -719,10 +732,29 @@ export function summarizeUsage(
   range: UsageRange,
   now: number,
   surface: UsageSurface = "all",
+  filters?: UsageSummaryFilters,
 ): UsageSummary {
-  const { since } = rangeWindow(range, now);
+  // Explicit from/to override the range window: since is skipped so we do not
+  // double-trim against request-history (which has no range, only from/to).
+  const hasExplicitTime = filters?.from !== undefined || filters?.to !== undefined;
+  const { since } = hasExplicitTime ? { since: null } : rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
+    // Optional filters (top-level exact match, matching the indexer) must run
+    // before the surface branches: those return directly, so later placement
+    // would silently skip filters when surface !== "all".
+    if (filters?.provider !== undefined && entry.provider !== filters.provider) return false;
+    if (filters?.model !== undefined && entry.model !== filters.model) return false;
+    if (filters?.status !== undefined) {
+      if (typeof filters.status === "number") {
+        if (entry.status !== filters.status) return false;
+      } else {
+        const tier = Number(filters.status[0]); // "2xx" -> 2
+        if (Math.floor(entry.status / 100) !== tier) return false;
+      }
+    }
+    if (filters?.from !== undefined && entry.timestamp < filters.from) return false;
+    if (filters?.to !== undefined && entry.timestamp > filters.to) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
     // Codex = the historical unlabelled bucket. Before the grok tag existed every
@@ -744,6 +776,7 @@ export function summarizeUsage(
     surface,
     since,
     generatedAt: now,
+    ...(filters ? { filters } : {}),
     summary: totals,
     days: buildDayGrid(range, since, now, filteredEntries),
     models: buildModels(filteredEntries, totals.totalTokens),

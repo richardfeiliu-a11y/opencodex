@@ -55,7 +55,7 @@ export interface RequestHistoryFilters {
   provider?: string;
   model?: string;
   requestedModel?: string;
-  status?: number;
+  status?: number | "2xx" | "3xx" | "4xx" | "5xx";
   conversationId?: string;
   surface?: string;
   inboundProtocol?: string;
@@ -511,7 +511,15 @@ function queryRows(
   if (filters.provider !== undefined) add("provider = ?", filters.provider);
   if (filters.model !== undefined) add("model = ?", filters.model);
   if (filters.requestedModel !== undefined) add("requested_model = ?", filters.requestedModel);
-  if (filters.status !== undefined) add("status = ?", filters.status);
+  if (filters.status !== undefined) {
+    if (typeof filters.status === "number") {
+      add("status = ?", filters.status);
+    } else {
+      const tier = Number(filters.status[0]); // "2xx" -> 2
+      add("status >= ?", tier * 100);
+      add("status < ?", tier * 100 + 100);
+    }
+  }
   if (filters.conversationId !== undefined) add("conversation_id = ?", filters.conversationId);
   if (filters.surface !== undefined) add("surface = ?", filters.surface);
   if (filters.inboundProtocol !== undefined) add("inbound_protocol = ?", filters.inboundProtocol);

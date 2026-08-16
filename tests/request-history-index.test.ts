@@ -121,6 +121,32 @@ describe("request-history index (RI-02)", () => {
     expect(after.meta.lastError).not.toMatch(/identity changed/i);
   });
 
+  test("status class filters rows by HTTP tier", async () => {
+    appendUsageEntry(entry("req-200", 1000, "a", "m1", { status: 200 }));
+    appendUsageEntry(entry("req-404", 1001, "a", "m1", { status: 404 }));
+    appendUsageEntry(entry("req-503", 1002, "a", "m1", { status: 503 }));
+    appendUsageEntry(entry("req-301", 1003, "a", "m1", { status: 301 }));
+
+    const all = await queryRequestHistory({}, undefined, 10);
+    expect(all.rows.length).toBe(4);
+
+    const twos = await queryRequestHistory({ status: "2xx" }, undefined, 10);
+    expect(twos.rows.map(r => r.requestId)).toEqual(["req-200"]);
+
+    const fours = await queryRequestHistory({ status: "4xx" }, undefined, 10);
+    expect(fours.rows.map(r => r.requestId)).toEqual(["req-404"]);
+
+    const fives = await queryRequestHistory({ status: "5xx" }, undefined, 10);
+    expect(fives.rows.map(r => r.requestId)).toEqual(["req-503"]);
+
+    const threes = await queryRequestHistory({ status: "3xx" }, undefined, 10);
+    expect(threes.rows.map(r => r.requestId)).toEqual(["req-301"]);
+
+    // Exact numeric status still works.
+    const exact = await queryRequestHistory({ status: 404 }, undefined, 10);
+    expect(exact.rows.map(r => r.requestId)).toEqual(["req-404"]);
+  });
+
   test("appended rows are ingested as a tail, never a full rebuild", async () => {
     for (const row of seedRows(5)) appendUsageEntry(row);
     const first = await queryRequestHistory({}, undefined, 10);
