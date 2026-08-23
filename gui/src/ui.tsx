@@ -96,16 +96,6 @@ export function DatePicker({
   const [month, setMonth] = useState(parsed ? parsed.getMonth() : new Date().getMonth());
   const [day, setDay] = useState(parsed?.getDate() ?? new Date().getDate());
 
-  // 打开时同步当前值
-  useEffect(() => {
-    if (open) {
-      const d = value !== undefined ? new Date(value) : new Date();
-      setYear(d.getFullYear());
-      setMonth(d.getMonth());
-      setDay(d.getDate());
-    }
-  }, [open, value]);
-
   const close = useCallback((restoreFocus = false) => {
     setOpen(false);
     if (restoreFocus) triggerRef.current?.focus();
@@ -218,7 +208,19 @@ export function DatePicker({
         ref={triggerRef}
         type="button"
         className={`select-trigger${isEmpty ? " select-trigger--placeholder" : ""}`}
-        onClick={() => { if (open) close(); else setOpen(true); }}
+        onClick={() => {
+          if (open) {
+            close();
+          } else {
+            // 打开时在事件处理器中同步当前值（而非 effect 内 setState），
+            // 避免级联渲染（react-compiler EffectSetState 规则）。
+            const d = value !== undefined ? new Date(value) : new Date();
+            setYear(d.getFullYear());
+            setMonth(d.getMonth());
+            setDay(d.getDate());
+            setOpen(true);
+          }
+        }}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={label}
